@@ -1,6 +1,7 @@
 {
   "name": "my-app",
   "version": "1.0.0",
+  "type": "module",
   "description": "An Electron application with React",
   "main": "./out/main/index.js",
   "author": "example.com",
@@ -20,15 +21,22 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "@tailwindcss/typography": "^0.5.19",
     "better-sqlite3": "^12.6.2",
     "cheerio": "^1.2.0",
     "date-fns": "^4.1.0",
     "echarts": "^6.0.0",
+    "fingerprint-generator": "^2.1.82",
+    "fingerprint-injector": "^2.1.82",
+    "localforage": "^1.10.0",
     "lucide-react": "^0.577.0",
     "openai": "^6.34.0",
-    "playwright": "^1.58.2",
+    "playwright": "^1.59.1",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^16.1.1",
+    "remark-gfm": "^4.0.1",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {

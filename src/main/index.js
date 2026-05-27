@@ -1,3 +1,4 @@
+import { launchSandbox } from './browser-manager.js';
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, is } from '@electron-toolkit/utils'
@@ -18,7 +19,7 @@ function createWindow() {
     width: 1440, height: 900, show: false, autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
       contextIsolation: true,
       webSecurity: false,
@@ -137,67 +138,6 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('❌ 启动静默巡逻兵前发生致命错误 (大概率是数据库查询写错了):', err);
   }
-
-  // ==================== 改进后的 open-account-session ====================
-  ipcMain.handle('open-account-session', async (event, { platform, accountKey, customUrl, accountId }) => {
-    
-    // 🚨 核心修改：优先使用 PLATFORM_HOME_URLS（创作者首页）
-    const targetUrl = customUrl || PLATFORM_HOME_URLS[platform] || PLATFORM_URLS[platform] || 'https://www.baidu.com'
-
-    try {
-      const userDataPath = path.join(app.getPath('userData'), 'playwright_profiles', `chrome_data_${accountId || Date.now()}`)
-      const browserContext = await chromium.launchPersistentContext(userDataPath, {
-        headless: false,
-        channel: 'chrome',
-        viewport: { width: 1280, height: 800 },
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-        locale: 'zh-CN',
-        args: [
-          `--app=${targetUrl}`,          
-          '--window-position=100,100',   
-          '--window-size=1000,720',      
-          '--hide-scrollbars',           
-          '--mute-audio',
-          '--disable-infobars'           
-        ],     
-        ignoreDefaultArgs: ['--enable-automation', '--no-sandbox', '--disable-blink-features=AutomationControlled']
-      });
-      
-      const page = browserContext.pages().length > 0 
-        ? browserContext.pages()[0] 
-        : await browserContext.newPage()
-
-      await page.addInitScript(() => {
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
-        delete window.navigator.languages;
-        window.navigator.languages = ['zh-CN', 'zh'];
-      })
-
-      // 🌟 修复问题2核心：改为 domcontentloaded，不准死等网络空闲！
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(e => {
-         if (e.message.includes('Target page, context or browser has been closed')) {
-            console.log('用户已手动关闭沙盒窗口，属正常行为。');
-         } else {
-            throw e; 
-         }
-      });
-
-      return { success: true }
-      
-    } catch (error) {
-      console.error('[open-account-session] 错误:', error.message)
-      if (error.message.includes('Target page, context or browser has been closed')) {
-         return { success: true }; 
-      }
-      if (error.message.includes('Target directory is in use') || error.message.includes('lock')) {
-        return { 
-          success: false, 
-          message: '【拦截】该账号浏览器正被使用！已尝试强制清理，请 2 秒后再次点击唤起' 
-        }
-      }
-      return { success: false, message: error.message }
-    }
-  })
 
   createWindow()
 

@@ -1,14 +1,32 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   PlayCircle, Users, RefreshCw, Trash2, 
   BarChart2, Clock, ArrowUpRight, Sparkles, Flame, Crown,
-  Lock, ShieldAlert // 💥 新增图标
+  Lock, ShieldAlert, Heart, Radar
 } from 'lucide-react';
+
+// ==============================================
+// 🎨 平台专属品牌色与 Logo 映射字典
+// ==============================================
+const PLATFORM_STYLES = {
+  '抖音': { bg: 'bg-[#151723]', text: '抖' },
+  '小红书': { bg: 'bg-[#ff2442]', text: '小' },
+  'B站': { bg: 'bg-[#fb7299]', text: 'B' },
+  '快手': { bg: 'bg-[#ff5000]', text: '快' },
+  '微信视频号': { bg: 'bg-[#07c160]', text: '微' },
+  '百家号': { bg: 'bg-[#2162e4]', text: '百' },
+  '爱奇艺号': { bg: 'bg-[#00cc36]', text: '爱' },
+  '知乎': { bg: 'bg-[#0066ff]', text: '知' },
+  '微博': { bg: 'bg-[#ff8200]', text: '微' },
+  '企鹅号(腾讯)': { bg: 'bg-[#1b7ef2]', text: '企' },
+  '腾讯视频': { bg: 'bg-[#ff5c38]', text: '腾' },
+  '大鱼号(优酷)': { bg: 'bg-[#ff6600]', text: '大' }
+};
 
 // ==============================================
 // ⏱️ 核心新增：24小时防风控冷却 Hook
 // ==============================================
-const COOLDOWN_TIME = 24 * 60 * 60 * 1000; // 24小时的毫秒数
+const COOLDOWN_TIME = 24 * 60 * 60 * 1000; 
 
 const useSyncCooldown = () => {
   const [timeLeft, setTimeLeft] = useState(0);
@@ -92,18 +110,28 @@ export default function Dashboard({ onGoToAccountManager }) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // 引擎状态控制
   const [syncingAll, setSyncingAll] = useState(false);
   const [syncingId, setSyncingId] = useState(null);
   
-  // 数字动画
-  const totalViews = useCountUp(stats?.totalViews || 0);
+  // 💥 核心：全局 30天 播放总量实时计算
+  const global30DaysViews = useMemo(() => {
+    let sum = 0;
+    stats?.accounts?.forEach(acc => {
+      if (acc.trend_data) {
+        try {
+          const arr = JSON.parse(acc.trend_data);
+          sum += arr.reduce((s, item) => s + item.views, 0);
+        } catch(e) {}
+      }
+    });
+    return sum;
+  }, [stats?.accounts]);
+
+  const topTotalViews = useCountUp(global30DaysViews);
   const totalFollowers = useCountUp(stats?.totalFollowers || 0);
 
-  // 💥 引入防风控冷却状态
   const { isCoolingDown, formattedTime, triggerCooldown } = useSyncCooldown();
 
-  // 数据流中枢
   const loadDashboardData = async (isInitial = false) => {
     try {
       if (isInitial) setLoading(true);
@@ -127,13 +155,8 @@ export default function Dashboard({ onGoToAccountManager }) {
     loadDashboardData(true);
   }, []); 
 
-  // ==============================================
-  // 🚀 一键全网同步 (带防风控锁)
-  // ==============================================
   const handleSyncAll = async () => {
     if (syncingAll || isCoolingDown) return;
-    
-    // 弹窗安全提示
     if (!window.confirm('【风控警告】为保护账号安全，全网数据每天仅限提取1次。提取后功能将被物理锁定24小时。确认执行吗？')) return;
 
     setSyncingAll(true);
@@ -141,7 +164,7 @@ export default function Dashboard({ onGoToAccountManager }) {
       const res = await window.electron.ipcRenderer.invoke('sync-account-stats-all');
       if (res.success) {
         await loadDashboardData(); 
-        triggerCooldown(); // 💥 成功后立刻触发 24小时物理锁定
+        triggerCooldown(); 
       } else {
         alert('部分节点同步受阻：' + res.message);
       }
@@ -153,10 +176,7 @@ export default function Dashboard({ onGoToAccountManager }) {
     }
   };
 
-  // ==============================================
-  // 🎯 单号精准同步 (带防风控锁)
-  // ==============================================
-  const handleSyncSingle = async (accountId, platform) => {
+  const handleBasicSync = async (accountId, platform) => {
     if (syncingId === accountId || isCoolingDown) return;
     setSyncingId(accountId);
     try {
@@ -164,17 +184,32 @@ export default function Dashboard({ onGoToAccountManager }) {
       if (res.success) {
         await loadDashboardData(); 
       } else {
-        alert(`[${platform}] 同步失败：` + res.message);
+        alert(`[${platform}] 基础同步失败：` + res.message);
       }
     } catch (err) {
-      console.error(err);
       alert('系统异常：' + err.message);
     } finally {
       setSyncingId(null);
     }
   };
 
-  // 删除逻辑
+  const handleDeepSync = async (accountId, platform) => {
+    if (syncingId === accountId) return;
+    setSyncingId(accountId);
+    try {
+      const res = await window.electron.ipcRenderer.invoke('sync-30days-data', { accountId, platform });
+      if (res.success) {
+        await loadDashboardData(); 
+      } else {
+        alert(`[${platform}] 深度提取失败：` + res.message);
+      }
+    } catch (err) {
+      alert('系统异常：' + err.message);
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
   const handleDeleteAccount = async (id) => {
     if (!window.confirm('警告：确定要彻底销毁该节点及其所有历史数据吗？')) return;
     try {
@@ -199,7 +234,6 @@ export default function Dashboard({ onGoToAccountManager }) {
     </div>
   );
 
-  // 获取当前修仙段位信息
   const rankInfo = getCultivationRank(stats?.totalFollowers || 0);
   const progressPercent = rankInfo.next ? Math.min(100, ((stats?.totalFollowers || 0) / rankInfo.next) * 100) : 100;
 
@@ -227,14 +261,13 @@ export default function Dashboard({ onGoToAccountManager }) {
           </div>
         </div>
         
-        {/* 💥 核心防风控锁：包裹了倒计时样式和警告标识 */}
         <div className="flex flex-col items-end">
           <button 
             onClick={handleSyncAll}
             disabled={syncingAll || loading || isCoolingDown}
             className={`flex items-center gap-2 px-6 py-2.5 rounded-lg shadow-md font-medium transition-all ${
               isCoolingDown 
-                ? 'bg-slate-300 text-slate-500 cursor-not-allowed border border-slate-400/50' // 冷却状态：灰色石碑
+                ? 'bg-slate-300 text-slate-500 cursor-not-allowed border border-slate-400/50' 
                 : 'bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white hover:shadow-lg active:scale-95'
             }`}
           >
@@ -266,14 +299,14 @@ export default function Dashboard({ onGoToAccountManager }) {
           <div className="relative z-10">
             <div className="flex items-center gap-2 text-blue-600 mb-3">
               <PlayCircle size={20} />
-              <span className="font-medium">总播放量</span>
+              <span className="font-medium">30天播放总量</span>
             </div>
             <h2 className="text-3xl md:text-4xl font-bold text-slate-800 mb-1">
-              {totalViews.toLocaleString()}
+              {topTotalViews.toLocaleString()}
             </h2>
             <div className="flex items-center text-xs text-slate-500">
               <ArrowUpRight size={12} className="mr-1 text-green-500" />
-              <span>较昨日 +{Math.round((stats?.totalViews || 0) * 0.08).toLocaleString()} 次</span>
+              <span>涵盖所有节点近30天播放累加</span>
             </div>
           </div>
         </div>
@@ -290,7 +323,7 @@ export default function Dashboard({ onGoToAccountManager }) {
             </h2>
             <div className="flex items-center text-xs text-slate-500">
               <ArrowUpRight size={12} className="mr-1 text-green-500" />
-              <span>较昨日 +{Math.round((stats?.totalFollowers || 0) * 0.12).toLocaleString()} 人</span>
+              <span>涵盖所有节点粉丝指标累加</span>
             </div>
           </div>
         </div>
@@ -311,7 +344,6 @@ export default function Dashboard({ onGoToAccountManager }) {
           </div>
         </div>
 
-        {/* 修仙段位卡片 */}
         <div className={`bg-gradient-to-br ${rankInfo.color} rounded-2xl shadow-lg hover:shadow-xl transition-all p-6 relative overflow-hidden group`}>
           <div className="absolute -right-8 -top-8 w-24 h-24 bg-white/10 rounded-full opacity-70 group-hover:scale-110 transition-transform duration-500"></div>
           <div className="relative z-10 text-white">
@@ -329,7 +361,6 @@ export default function Dashboard({ onGoToAccountManager }) {
               {rankInfo.title}
             </h2>
             
-            {/* 灵力进度条 */}
             <div className="mt-auto">
               <div className="flex justify-between text-[10px] sm:text-xs mb-1.5 opacity-90 font-medium">
                 <span>当前修为: {(stats?.totalFollowers || 0).toLocaleString()}</span>
@@ -359,97 +390,151 @@ export default function Dashboard({ onGoToAccountManager }) {
         <div className="p-6 border-b border-slate-200 flex justify-between items-center">
           <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
             <BarChart2 size={18} className="text-blue-600" />
-            账号列表
+            节点雷达阵列
           </h3>
-          <span className="text-sm text-slate-500">共 {stats?.accounts?.length || 0} 个账号</span>
+          <span className="text-sm text-slate-500 font-medium">存活 {stats?.accounts?.length || 0} 个节点</span>
         </div>
         
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="bg-slate-50 text-left">
-                <th className="px-6 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">账号名称</th>
-                <th className="px-6 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">平台</th>
-                <th className="px-6 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">粉丝数</th>
-                <th className="px-6 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">播放量</th>
-                <th className="px-6 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider text-right">操作</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">账号名称</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">平台</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">粉丝数</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  <div className="flex items-center gap-1"><PlayCircle size={14} className="text-blue-500"/> 30天播放</div>
+                </th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  <div className="flex items-center gap-1"><Heart size={14} className="text-rose-500"/> 获赞量</div>
+                </th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">操作指令</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-200">
+            <tbody className="divide-y divide-slate-100">
               {stats?.accounts?.map(acc => {
                 const isThisSyncing = syncingId === acc.id;
+                
+                // 🎨 平台样式与逻辑判断
+                const pStyle = PLATFORM_STYLES[acc.platform] || { bg: 'bg-slate-500', text: acc.platform?.[0] || 'N' };
+                
+                // 🧠 从 JSON 中现场提取 30 天总播放量
+                let thirtyDaysViews = 0;
+                if (acc.trend_data) {
+                  try {
+                    const arr = JSON.parse(acc.trend_data);
+                    thirtyDaysViews = arr.reduce((sum, item) => sum + item.views, 0);
+                  } catch(e) {}
+                }
+
+                // 💥 拆分显示逻辑 (极简一统版：无视平台，只要有值就显！)
+                const thirtyViewsStr = thirtyDaysViews > 0 ? thirtyDaysViews.toLocaleString() : '--';
+                const likesStr = acc.total_views > 0 ? acc.total_views.toLocaleString() : '--';
 
                 return (
-                  <tr 
-                    key={acc.id} 
-                    className="group hover:bg-slate-50 transition-colors cursor-default"
-                  >
+                  <tr key={acc.id} className="group hover:bg-indigo-50/30 transition-colors cursor-default">
+                    {/* 账号名称 */}
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="font-medium text-slate-800">{acc.real_name || acc.alias}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                        acc.platform === '抖音' ? 'bg-red-50 text-red-600' :
-                        acc.platform === 'B站' ? 'bg-blue-50 text-blue-600' :
-                        acc.platform === '快手' ? 'bg-orange-50 text-orange-600' :
-                        acc.platform === '百家号' ? 'bg-green-50 text-green-600' :
-                        acc.platform === '微信视频号' ? 'bg-teal-50 text-teal-600' :
-                        'bg-slate-50 text-slate-600'
-                      }`}>
-                        {acc.platform}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-slate-700 font-medium">
-                      {(acc.followers || 0).toLocaleString()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-slate-700">
-                      {(acc.total_views || 0).toLocaleString()}
+                      <div className="font-bold text-slate-800 text-sm">{acc.real_name || acc.alias}</div>
                     </td>
                     
+                    {/* 平台 Logo + 文字 */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center gap-2.5">
+                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white font-black text-xs shadow-md ${pStyle.bg}`}>
+                          {pStyle.text}
+                        </div>
+                        <span className="text-sm font-bold text-slate-700">{acc.platform}</span>
+                      </div>
+                    </td>
+                    
+                    {/* 粉丝数 */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className="text-slate-800 font-bold">{(acc.followers || 0).toLocaleString()}</span>
+                    </td>
+                    
+                    {/* 30天播放量 */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {thirtyViewsStr !== '--' 
+                        ? <span className="text-blue-600 font-bold bg-blue-50 px-2.5 py-1 rounded-md">{thirtyViewsStr}</span> 
+                        : <span className="text-slate-300 font-medium tracking-widest">{thirtyViewsStr}</span>}
+                    </td>
+                    
+                    {/* 获赞量 */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {likesStr !== '--' 
+                        ? <span className="text-rose-500 font-bold bg-rose-50 px-2.5 py-1 rounded-md">{likesStr}</span> 
+                        : <span className="text-slate-300 font-medium tracking-widest">--</span>}
+                    </td>
+                    
+                    {/* 🚀 操作列 */}
                     <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <div className="flex items-center justify-end gap-4 opacity-50 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center justify-end gap-3 opacity-50 group-hover:opacity-100 transition-opacity">
                         
-                        {/* 💥 冷却锁定时，直接隐藏单号同步按钮，彻底杜绝手欠 */}
                         {!isCoolingDown && (
-                          <button 
-                            onClick={() => handleSyncSingle(acc.id, acc.platform)}
-                            disabled={isThisSyncing || syncingAll}
-                            className={`flex items-center gap-1.5 transition-colors font-medium ${
-                              isThisSyncing 
-                                ? 'text-blue-600 opacity-100' 
-                                : 'text-slate-500 hover:text-blue-600'
-                            }`}
-                          >
-                            <RefreshCw size={14} className={isThisSyncing ? 'animate-spin' : ''} />
-                            <span className="text-sm">{isThisSyncing ? '同步中...' : '同步'}</span>
-                          </button>
-                        )}
+                          <>
+                            {/* 基础同步按钮 */}
+                            <button 
+                              onClick={() => handleBasicSync(acc.id, acc.platform)}
+                              disabled={isThisSyncing || syncingAll}
+                              className={`flex items-center gap-1 transition-colors font-bold px-2 py-1 rounded ${
+                                isThisSyncing ? 'text-indigo-600' : 'text-slate-500 hover:text-indigo-600 hover:bg-indigo-50'
+                              }`}
+                              title="后台静默刷新基础信息"
+                            >
+                              <RefreshCw size={13} className={isThisSyncing ? 'animate-spin' : ''} />
+                              <span className="text-xs">基础刷新</span>
+                            </button>
 
+                            {/* 深度提取按钮 */}
+                            {['抖音', '快手', '小红书', '微信视频号', '百家号', 'B站'].includes(acc.platform) && (
+                              <button 
+                                onClick={() => handleDeepSync(acc.id, acc.platform)}
+                                disabled={isThisSyncing || syncingAll}
+                                className={`flex items-center gap-1 transition-colors font-bold px-2 py-1 rounded ${
+                                  isThisSyncing ? 'text-orange-500' : 'text-orange-400 hover:text-orange-600 hover:bg-orange-50'
+                                }`}
+                                title="打开雷达深度嗅探30天曲线数据"
+                              >
+                                <Radar size={13} className={isThisSyncing ? 'animate-ping' : ''} />
+                                <span className="text-xs">深度提取</span>
+                              </button>
+                            )}
+                          </>
+                        )}
+                        
+                        <div className="w-px h-4 bg-slate-200 mx-1"></div>
+
+                        {/* 删除按钮 */}
                         <button 
                           onClick={() => handleDeleteAccount(acc.id)}
                           disabled={isThisSyncing || syncingAll}
-                          className="text-slate-400 hover:text-red-500 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                          className="text-slate-400 hover:text-red-500 transition-colors flex items-center gap-1 font-bold disabled:opacity-50 p-1"
+                          title="销毁节点"
                         >
                           <Trash2 size={14} />
-                          <span className="text-sm">删除</span>
                         </button>
-
                       </div>
                     </td>
                   </tr>
                 );
               })}
+              
               {(!stats?.accounts || stats.accounts.length === 0) && (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
-                    <p>暂无账号数据</p>
-                    {/* 💥 核心修改：加上 onClick 触发外部传进来的跳转函数 */}
-                    <button 
-                      onClick={onGoToAccountManager} 
-                      className="mt-2 text-blue-600 hover:underline text-sm font-bold tracking-wider"
-                    >
-                      前往账号管理中心添加 &rarr;
-                    </button>
+                  <td colSpan={6} className="px-6 py-16 text-center">
+                    <div className="flex flex-col items-center justify-center space-y-3">
+                      <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-2">
+                        <BarChart2 size={32} className="text-slate-300" />
+                      </div>
+                      <p className="text-slate-500 font-medium">矩阵库空空如也</p>
+                      <button 
+                        onClick={onGoToAccountManager} 
+                        className="mt-2 px-6 py-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-full text-sm font-bold tracking-wider transition-colors"
+                      >
+                        前往账号管理中心注入节点 &rarr;
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )}

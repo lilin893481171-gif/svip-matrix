@@ -1,12 +1,12 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { Plus, Users, Trash2, ChevronRight, X, Lock, Edit, ChevronDown, GripVertical, RefreshCw, ScanLine, FolderPlus, Shield, Chrome } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Plus, Users, Trash2, ChevronRight, X, Lock, Edit, ChevronDown, GripVertical, FolderPlus, Shield, Chrome, Loader2, ExternalLink, Globe, ShieldAlert, Activity } from 'lucide-react';
 
 const getElectron = () => {
   if (typeof window !== 'undefined' && window.electron) return window.electron;
   return {
     ipcRenderer: {
       invoke: async () => ({ success: false, message: '非原生环境' }),
-      on: () => {}, 
+      on: () => {},
       removeAllListeners: () => {}
     }
   };
@@ -15,26 +15,30 @@ const getElectron = () => {
 export default function AccountManagerView({ accounts, setAccounts }) {
   const [showModal, setShowModal] = useState(false);
   const [modalStep, setModalStep] = useState(1);
-  const [selectedPlatform, setSelectedPlatform] = useState(null);
-  const [formData, setFormData] = useState({ alias: '', customName: '', customUrl: '' });
+  const [loginMethod, setLoginMethod] = useState('scan'); 
+  const [cookieStr, setCookieStr] = useState('');
   
+  const [selectedPlatform, setSelectedPlatform] = useState(null);
+  const [formData, setFormData] = useState({ alias: '', customName: '', customUrl: '', proxy: '' });
+
   const [editingTag, setEditingTag] = useState({ id: null, value: '' });
 
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [draggingId, setDraggingId] = useState(null);
   const [dragOverGroup, setDragOverGroup] = useState(null);
-  
+
   const [customGroups, setCustomGroups] = useState(() => {
     return JSON.parse(localStorage.getItem('nikola_custom_groups') || '[]');
   });
   const [editingGroup, setEditingGroup] = useState({ oldName: '', newName: '' });
-  
+
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
 
-  const [isSniffing, setIsSniffing] = useState({});
-  const [activeTabs, setActiveTabs] = useState([]); 
-  const [currentTabId, setCurrentTabId] = useState(null);
+  const [bindingStatus, setBindingStatus] = useState(null);
+  
+  const [sniffingStatus, setSniffingStatus] = useState({});
+  const queuedAccounts = useRef(new Set());
 
   const electron = getElectron();
 
@@ -43,7 +47,7 @@ export default function AccountManagerView({ accounts, setAccounts }) {
     '快手': 'https://cp.kuaishou.com/profile',
     '微信视频号': 'https://channels.weixin.qq.com/platform',
     'B站': 'https://member.bilibili.com/platform/home',
-    '小红书': 'https://creator.xiaohongshu.com/new/home',
+    '小红书': 'https://www.xiaohongshu.com',
     '百家号': 'https://baijiahao.baidu.com/builder/rc/home',
     '知乎': 'https://www.zhihu.com/creator',
     '微博': 'https://me.weibo.com/',
@@ -58,84 +62,156 @@ export default function AccountManagerView({ accounts, setAccounts }) {
       try {
         const freshAccounts = await electron.ipcRenderer.invoke('db-get-accounts');
         if (freshAccounts && freshAccounts.length > 0) setAccounts(freshAccounts);
-      } catch (error) { console.error('刷新数据库失败:', error); }
+      } catch (error) {}
     };
     fetchFreshData();
   }, []);
+
+  useEffect(() => {
+    if (accounts.length > 0) {
+      const toSniff = accounts.filter(a => !queuedAccounts.current.has(a.id));
+      
+      if (toSniff.length > 0) {
+        toSniff.forEach(a => queuedAccounts.current.add(a.id));
+        
+        setSniffingStatus(prev => {
+          const next = { ...prev };
+          toSniff.forEach(a => next[a.id] = 'sniffing');
+          return next;
+        });
+
+        const queue = [...toSniff];
+        let activeWorkers = 0;
+
+        const processQueue = async () => {
+          if (queue.length === 0 && activeWorkers === 0) return;
+          while (activeWorkers < 2 && queue.length > 0) {
+            const acc = queue.shift();
+            activeWorkers++;
+            
+            electron.ipcRenderer.invoke('check-account-status', { accountId: acc.id, platform: acc.platform })
+              .then(res => {
+                setSniffingStatus(prev => ({ ...prev, [acc.id]: res.status }));
+                setAccounts(prevAccounts => prevAccounts.map(a => a.id === acc.id ? { ...a, status: res.status } : a));
+              })
+              .catch(() => {
+                setSniffingStatus(prev => ({ ...prev, [acc.id]: '离线异常' }));
+              })
+              .finally(() => {
+                activeWorkers--;
+                processQueue();
+              });
+          }
+        };
+        processQueue();
+      }
+    }
+  }, [accounts]);
 
   useEffect(() => {
     localStorage.setItem('nikola_custom_groups', JSON.stringify(customGroups));
   }, [customGroups]);
 
   const platforms = [
-
     { name: '抖音', color: 'bg-slate-900' },
-
     { name: '小红书', color: 'bg-red-500' },
-
     { name: 'B站', color: 'bg-pink-400' },
-
     { name: '快手', color: 'bg-orange-500' },
-
     { name: '微信视频号', color: 'bg-emerald-600' },
-
     { name: '百家号', color: 'bg-blue-600' },
-
     { name: '爱奇艺号', color: 'bg-green-500' },
-
     { name: '知乎', color: 'bg-blue-700' },
-
     { name: '微博', color: 'bg-amber-500' },
-
     { name: '企鹅号(腾讯)', color: 'bg-blue-500' },
-
     { name: '腾讯视频', color: 'bg-blue-500' },
-
     { name: '大鱼号(优酷)', color: 'bg-orange-600' },
-
     { name: '自定义', color: 'bg-slate-400', isCustom: true }
-
   ];
 
   const groupedAccounts = useMemo(() => {
     const groups = { '默认分组': [] };
     customGroups.forEach(g => { if (!groups[g]) groups[g] = []; });
     accounts.forEach(acc => {
-      const gName = acc.group_name || acc.group || '默认分组'; 
+      const gName = acc.group_name || acc.group || '默认分组';
       if (!groups[gName]) groups[gName] = [];
       groups[gName].push(acc);
     });
     return groups;
   }, [accounts, customGroups]);
 
-  const handleOpenTab = (acc) => {
-    const existingTab = activeTabs.find(t => t.accountId === acc.id);
-    if (existingTab) {
-      setCurrentTabId(existingTab.id); 
-      return;
+  const handlePlatformSelect = async (platform) => {
+    if (platform.isCustom) { setSelectedPlatform(platform); setModalStep(2); return; }
+    if (loginMethod === 'cookie') { setSelectedPlatform(platform); setModalStep(3); return; }
+
+    setShowModal(false);
+    setBindingStatus({ platform: platform.name, startTime: Date.now(), mode: 'scan' });
+    try {
+      const result = await electron.ipcRenderer.invoke('auto-bind-account', {
+          platform: platform.name,
+          proxyStr: formData.proxy
+      });
+      if (result.success) {
+        const updatedAccounts = await electron.ipcRenderer.invoke('db-get-accounts');
+        setAccounts(updatedAccounts || []);
+        setBindingStatus({ platform: platform.name, startTime: Date.now(), mode: 'scan', done: true, success: true });
+        setTimeout(() => setBindingStatus(null), 3000);
+      } else {
+        setBindingStatus({ platform: platform.name, startTime: Date.now(), mode: 'scan', done: true, success: false, message: result.message });
+      }
+    } catch (e) {
+      setBindingStatus({ platform: platform.name, startTime: Date.now(), mode: 'scan', done: true, success: false, message: '后端进程异常' });
     }
-    const newTab = {
-      id: `tab_${Date.now()}`,
-      accountId: acc.id,
-      title: acc.real_name || acc.alias || acc.platform,
-      url: PLATFORM_URLS[acc.platform] || acc.customUrl || 'https://www.baidu.com',
-      partition: `persist:chrome_data_${acc.id}`, 
-      platform: acc.platform,
-      avatar: acc.avatar
-    };
-    setActiveTabs([...activeTabs, newTab]);
-    setCurrentTabId(newTab.id);
   };
 
-  const handleCloseTab = (e, tabId) => {
-    e.stopPropagation(); 
-    const newTabs = activeTabs.filter(t => t.id !== tabId);
-    setActiveTabs(newTabs);
-    if (currentTabId === tabId) setCurrentTabId(newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null);
+  const handleAddSubmit = async () => {
+    const pName = selectedPlatform.isCustom ? (formData.customName || '自定义平台') : selectedPlatform.name;
+    const newAccData = { 
+        alias: formData.alias || `${pName}新账号`, 
+        group: '默认分组', 
+        platform: pName, 
+        customUrl: selectedPlatform.isCustom ? formData.customUrl : undefined,
+        proxy: formData.proxy 
+    };
+    try {
+      const result = await electron.ipcRenderer.invoke('db-add-account', newAccData);
+      if (result.success) {
+        const updatedAccounts = await electron.ipcRenderer.invoke('db-get-accounts');
+        setAccounts(updatedAccounts || []);
+        setShowModal(false); setModalStep(1); setFormData({ alias: '', customName: '', customUrl: '', proxy: '' });
+      }
+    } catch (e) {}
+  };
+
+  const handleCookieSubmit = async () => {
+    if (!cookieStr.trim()) return alert('请填入 Cookie 数据！');
+    setShowModal(false);
+    setModalStep(1);
+    
+    const pName = selectedPlatform.name;
+    setBindingStatus({ platform: pName, startTime: Date.now(), mode: 'cookie' });
+
+    try {
+        const result = await electron.ipcRenderer.invoke('import-account-cookie', {
+            platform: pName,
+            cookieStr: cookieStr,
+            proxyStr: formData.proxy 
+        });
+
+        if (result.success) {
+            const refreshed = await electron.ipcRenderer.invoke('db-get-accounts');
+            setAccounts(refreshed || []);
+            setBindingStatus({ platform: pName, startTime: Date.now(), mode: 'cookie', done: true, success: true, message: '环境洗白并提取数据成功！' });
+            setCookieStr(''); 
+            setTimeout(() => setBindingStatus(null), 3000);
+        } else {
+            setBindingStatus({ platform: pName, startTime: Date.now(), mode: 'cookie', done: true, success: false, message: result.message });
+        }
+    } catch(e) {
+        setBindingStatus({ platform: pName, startTime: Date.now(), mode: 'cookie', done: true, success: false, message: '底层进程异常' });
+    }
   };
 
   const toggleGroup = (groupName) => setCollapsedGroups(prev => ({ ...prev, [groupName]: !prev[groupName] }));
-
   const submitNewGroup = () => {
     const trimmed = newGroupName.trim();
     if (trimmed) {
@@ -144,12 +220,10 @@ export default function AccountManagerView({ accounts, setAccounts }) {
       setShowGroupModal(false); setNewGroupName('');
     }
   };
-
   const handleDeleteGroup = (groupName) => {
     if (groupName === '默认分组') return;
     setCustomGroups(prev => prev.filter(g => g !== groupName));
   };
-
   const handleRenameGroupSubmit = async (oldName, newName) => {
     const trimmed = newName.trim();
     if (!trimmed || trimmed === oldName) return setEditingGroup({ oldName: '', newName: '' });
@@ -189,59 +263,28 @@ export default function AccountManagerView({ accounts, setAccounts }) {
     if (!confirm("确定要永久删除此账号吗？")) return;
     await electron.ipcRenderer.invoke('db-delete-account', id);
     setAccounts(accounts.filter(a => a.id !== id));
-    const tabsToClose = activeTabs.filter(t => t.accountId === id);
-    if(tabsToClose.length > 0) handleCloseTab({stopPropagation: ()=>{}}, tabsToClose[0].id);
   };
 
-  const handleSniff = async (e, acc) => {
-    e.stopPropagation();
-    setIsSniffing(prev => ({...prev, [acc.id]: true}));
-    try {
-      await electron.ipcRenderer.invoke('sync-30days-data', { accountId: acc.id, platform: acc.platform });
-      const freshAccounts = await electron.ipcRenderer.invoke('db-get-accounts');
-      setAccounts(freshAccounts || []);
-    } catch(err) { console.error(err); alert('同步失败，请确保您已在右侧内嵌页面登录。'); } 
-    finally { setIsSniffing(prev => ({...prev, [acc.id]: false})); }
+  const getStatusInfo = (id, defaultStatus) => {
+    const status = sniffingStatus[id] || defaultStatus;
+    if (status === 'sniffing') return { color: 'bg-fuchsia-500', ping: true, isOffline: false, icon: <Loader2 size={8} className="animate-spin text-white"/> };
+    if (status === '在线') return { color: 'bg-emerald-500', ping: false, isOffline: false, icon: null };
+    return { color: 'bg-rose-500', ping: false, isOffline: true, icon: <X size={8} className="text-white stroke-[3]"/> };
   };
 
-  const handlePlatformSelect = async (platform) => {
-    if (platform.isCustom) { setSelectedPlatform(platform); setModalStep(2); return; }
-    setShowModal(false); 
-    const tempAlias = `待登录_${platform.name}_${Math.floor(Math.random()*1000)}`;
-    const newAccData = { alias: tempAlias, group: '默认分组', platform: platform.name };
-    try {
-      const result = await electron.ipcRenderer.invoke('db-add-account', newAccData);
-      if (result.success) {
-        const updatedAccounts = await electron.ipcRenderer.invoke('db-get-accounts');
-        setAccounts(updatedAccounts || []);
-        const newAcc = updatedAccounts.find(a => a.alias === tempAlias) || updatedAccounts[updatedAccounts.length - 1];
-        if (newAcc) handleOpenTab(newAcc);
-      }
-    } catch (e) { console.error(e); alert('建立沙盒节点失败！'); }
-  };
-
-  const handleAddSubmit = async () => {
-    const pName = selectedPlatform.isCustom ? (formData.customName || '自定义平台') : selectedPlatform.name;
-    const newAccData = { alias: formData.alias || `${pName}新账号`, group: '默认分组', platform: pName, customUrl: selectedPlatform.isCustom ? formData.customUrl : undefined };
-    try {
-      const result = await electron.ipcRenderer.invoke('db-add-account', newAccData);
-      if (result.success) {
-        const updatedAccounts = await electron.ipcRenderer.invoke('db-get-accounts');
-        setAccounts(updatedAccounts || []);
-        setShowModal(false); setModalStep(1); setFormData({ alias: '', customName: '', customUrl: '' });
-        const newAcc = updatedAccounts.find(a => a.alias === newAccData.alias);
-        if (newAcc) handleOpenTab(newAcc);
-      }
-    } catch (e) { console.error(e); }
+  const formatElapsed = () => {
+    if (!bindingStatus) return '';
+    const elapsed = Math.floor((Date.now() - bindingStatus.startTime) / 1000);
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    return mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`;
   };
 
   return (
     <div className="flex h-full w-full rounded-xl overflow-hidden shadow-sm border border-slate-200 bg-white animate-in fade-in duration-300">
       
-      {/* 🚀 左侧：隔离矩阵库 */}
-      <div className="w-[260px] bg-slate-50 border-r border-slate-200 flex flex-col flex-shrink-0 min-h-0">
-        
-        {/* 头部控制栏 */}
+      {/* 左侧：隔离矩阵库 */}
+      <div className="w-[270px] bg-slate-50 border-r border-slate-200 flex flex-col flex-shrink-0 min-h-0">
         <div className="p-4 bg-white border-b border-slate-200 flex-shrink-0">
           <h2 className="text-sm font-bold text-slate-800 mb-3 flex items-center">
             <Users size={16} className="mr-2 text-indigo-600" /> 隔离矩阵库
@@ -256,27 +299,14 @@ export default function AccountManagerView({ accounts, setAccounts }) {
           </div>
         </div>
 
-        {/* 账号列表 */}
         <div className="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar min-h-0">
           {Object.entries(groupedAccounts).map(([groupName, groupAccs]) => (
             <div key={groupName} onDragOver={(e) => handleDragOver(e, groupName)} onDrop={(e) => handleDrop(e, groupName)}>
-              
-              {/* 分组头 */}
-              <div 
-                className="flex items-center justify-between p-2 cursor-pointer hover:bg-slate-200/50 rounded-md group transition"
-                onClick={() => toggleGroup(groupName)}
-              >
+              <div className="flex items-center justify-between p-2 cursor-pointer hover:bg-slate-200/50 rounded-md group transition" onClick={() => toggleGroup(groupName)}>
                 <div className="flex items-center text-xs font-bold text-slate-700 flex-1">
                   {collapsedGroups[groupName] ? <ChevronRight size={14} className="mr-1 text-slate-500" /> : <ChevronDown size={14} className="mr-1 text-slate-500" />}
                   {editingGroup.oldName === groupName ? (
-                    <input 
-                      autoFocus value={editingGroup.newName} 
-                      onChange={(e) => setEditingGroup({ ...editingGroup, newName: e.target.value })} 
-                      onBlur={() => handleRenameGroupSubmit(groupName, editingGroup.newName)} 
-                      onKeyDown={(e) => { if(e.key === 'Enter') handleRenameGroupSubmit(groupName, editingGroup.newName); }} 
-                      onClick={(e) => e.stopPropagation()} 
-                      className="border-b border-red-500 outline-none bg-transparent w-full" 
-                    />
+                    <input autoFocus value={editingGroup.newName} onChange={(e) => setEditingGroup({ ...editingGroup, newName: e.target.value })} onBlur={() => handleRenameGroupSubmit(groupName, editingGroup.newName)} onKeyDown={(e) => { if(e.key === 'Enter') handleRenameGroupSubmit(groupName, editingGroup.newName); }} onClick={(e) => e.stopPropagation()} className="border-b border-red-500 outline-none bg-transparent w-full" />
                   ) : (
                     <span className="truncate">{groupName}</span>
                   )}
@@ -292,63 +322,83 @@ export default function AccountManagerView({ accounts, setAccounts }) {
                 </div>
               </div>
 
-              {/* 卡片列表 */}
               {!collapsedGroups[groupName] && (
                 <div className="space-y-1.5 mt-1 px-1">
-                  {groupAccs.map(acc => (
-                    <div 
-                      key={acc.id} draggable onDragStart={(e) => handleDragStart(e, acc.id.toString())} onDragEnd={() => { setDraggingId(null); setDragOverGroup(null); }}
-                      onClick={() => handleOpenTab(acc)}
-                      className={`bg-white p-2.5 rounded-xl border cursor-pointer transition-all hover:border-indigo-300 shadow-sm group relative overflow-hidden
-                        ${activeTabs.some(t => t.accountId === acc.id) ? 'border-indigo-500 bg-indigo-50/20' : 'border-slate-200'}
-                        ${draggingId === acc.id.toString() ? 'opacity-50' : 'opacity-100'}
-                      `}
-                    >
+                  {groupAccs.map(acc => {
+                    const statusInfo = getStatusInfo(acc.id, acc.status);
+                    return (
+                    <div key={acc.id} draggable onDragStart={(e) => handleDragStart(e, acc.id.toString())} onDragEnd={() => { setDraggingId(null); setDragOverGroup(null); }} 
+                         className={`p-2.5 rounded-xl border cursor-pointer transition-all shadow-sm group relative overflow-hidden ${
+                           statusInfo.isOffline ? 'bg-rose-50/40 border-rose-200 hover:border-rose-400' : 'bg-white border-slate-200 hover:border-indigo-300'
+                         } ${draggingId === acc.id.toString() ? 'opacity-50' : 'opacity-100'}`} 
+                         onClick={async () => {
+                           if (draggingId === acc.id.toString()) return;
+                           const pName = acc.platform;
+                           setBindingStatus({ platform: pName, startTime: Date.now(), mode: 'scan' });
+                           try {
+                             await electron.ipcRenderer.invoke('open-account-session', { 
+                               platform: pName, 
+                               accountKey: acc.alias, 
+                               customUrl: acc.custom_url || undefined, 
+                               accountId: acc.id
+                             });
+                             setSniffingStatus(prev => ({ ...prev, [acc.id]: '在线' }));
+                             const refreshed = await electron.ipcRenderer.invoke('db-get-accounts');
+                             setAccounts(refreshed || []);
+                             setBindingStatus(null);
+                           } catch (e) {
+                             setBindingStatus({ platform: pName, startTime: Date.now(), mode: 'scan', done: true, success: false, message: '打开浏览器失败' });
+                           }
+                         }}>
                       <div className="flex items-center pr-2">
-                        {/* 头像 */}
-                        {acc.avatar ? (
-                          <img src={acc.avatar} referrerPolicy="no-referrer" className="w-8 h-8 rounded-lg object-cover border border-slate-100 flex-shrink-0" />
-                        ) : (
-                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white font-black text-xs flex-shrink-0 ${platforms.find(p => p.name === acc.platform)?.color || 'bg-slate-400'}`}>
-                            {acc.platform ? acc.platform[0] : 'N'}
-                          </div>
-                        )}
-                        
-                        {/* 文字信息 */}
-                        <div className="ml-2.5 flex-1 min-w-0">
-                          {editingTag.id === acc.id ? (
-                            <input 
-                              autoFocus value={editingTag.value} 
-                              onChange={(e) => setEditingTag({ ...editingTag, value: e.target.value })} 
-                              onBlur={() => submitEditTag(acc.id, acc.alias)} 
-                              onKeyDown={(e) => { if (e.key === 'Enter') submitEditTag(acc.id, acc.alias); }} 
-                              onClick={(e) => e.stopPropagation()} 
-                              className="w-full text-xs font-bold text-indigo-600 outline-none bg-transparent border-b border-indigo-200" 
-                            />
+                        <div className="relative flex-shrink-0">
+                          {acc.avatar ? (
+                            <img src={acc.avatar} referrerPolicy="no-referrer" className="w-9 h-9 rounded-lg object-cover border border-slate-100 shadow-sm" />
                           ) : (
-                            <div className="text-xs font-bold text-slate-800 truncate" title={acc.real_name || acc.alias}>{acc.real_name || acc.alias}</div>
+                            <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-white font-black text-xs shadow-sm ${platforms.find(p => p.name === acc.platform)?.color || 'bg-slate-400'}`}>
+                              {acc.platform ? acc.platform[0] : 'N'}
+                            </div>
                           )}
-                          <div className="text-[10px] text-slate-400 mt-0.5 truncate flex items-center">
-                             {acc.platform} 
-                             {acc.followers > 0 && <span className="ml-1">粉:{(acc.followers / 1000).toFixed(1)}k</span>}
+                          <div className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 ${statusInfo.color} rounded-full border-2 border-white flex items-center justify-center shadow-sm z-10`}>
+                            {statusInfo.ping && <span className="absolute inline-flex h-full w-full rounded-full bg-fuchsia-400 opacity-75 animate-ping"></span>}
+                            {statusInfo.icon}
                           </div>
                         </div>
-                      </div>
 
-                      {/* 🚀 终极修改：悬浮操作胶囊 (在卡片右侧垂直居中) */}
+                        <div className="ml-3 flex-1 min-w-0">
+                          {editingTag.id === acc.id ? (
+                            <input autoFocus value={editingTag.value} onChange={(e) => setEditingTag({ ...editingTag, value: e.target.value })} onBlur={() => submitEditTag(acc.id, acc.alias)} onKeyDown={(e) => { if (e.key === 'Enter') submitEditTag(acc.id, acc.alias); }} onClick={(e) => e.stopPropagation()} className="w-full text-xs font-bold text-indigo-600 outline-none bg-transparent border-b border-indigo-200" />
+                          ) : (
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <div className="text-xs font-bold text-slate-800 truncate" title={acc.real_name || acc.alias}>{acc.real_name || acc.alias}</div>
+                            </div>
+                          )}
+                           <div className="text-[10px] text-slate-400 mt-0.5 truncate flex flex-col gap-0.5">
+                              <span className="flex items-center gap-1.5">
+                                {acc.platform}
+                                {statusInfo.isOffline ? (
+                                  <span className="text-rose-500 font-medium flex items-center gap-0.5 bg-rose-100/50 px-1 rounded-sm"><ShieldAlert size={10}/>点击重登</span>
+                                ) : (
+                                  acc.user_id && <span className="text-indigo-400 font-mono">ID:{acc.user_id}</span>
+                                )}
+                              </span>
+                              <span className="flex items-center gap-2">
+                                {acc.followers > 0 && <span className="text-emerald-500">粉:{acc.followers >= 10000 ? (acc.followers / 10000).toFixed(1) + 'w' : acc.followers.toLocaleString()}</span>}
+                                {acc.total_views > 0 && <span className="text-amber-400">
+                                  {['抖音', '快手', '小红书', '微信视频号', '百家号'].includes(acc.platform) ? '赞:' : '播放:'}
+                                  {(acc.total_views >= 10000 ? (acc.total_views / 10000).toFixed(1) + 'w' : acc.total_views.toLocaleString())}
+                                </span>}
+                              </span>
+                           </div>
+                        </div>
+                      </div>
+                      
                       <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-white/95 backdrop-blur-sm p-1 rounded-lg shadow-md border border-slate-100 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
-                         <button onClick={(e) => handleSniff(e, acc)} className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition" title="嗅探数据">
-                            {isSniffing[acc.id] ? <RefreshCw size={12} className="animate-spin" /> : <ScanLine size={12} />}
-                         </button>
-                         <button onClick={(e) => { e.stopPropagation(); setEditingTag({ id: acc.id, value: acc.alias }); }} className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition" title="修改名称">
-                            <Edit size={12} />
-                         </button>
-                         <button onClick={(e) => handleDelete(e, acc.id)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-md transition" title="删除账号">
-                            <Trash2 size={12} />
-                         </button>
+                         <button onClick={(e) => { e.stopPropagation(); setEditingTag({ id: acc.id, value: acc.alias }); }} className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition" title="修改名称"><Edit size={12} /></button>
+                         <button onClick={(e) => handleDelete(e, acc.id)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-md transition" title="删除账号"><Trash2 size={12} /></button>
                       </div>
                     </div>
-                  ))}
+                  )})}
                 </div>
               )}
             </div>
@@ -356,68 +406,164 @@ export default function AccountManagerView({ accounts, setAccounts }) {
         </div>
       </div>
 
-      {/* 🚀 右侧：独立多标签浏览器系统 */}
-      <div className="flex-1 bg-slate-100 flex flex-col min-w-0 min-h-0 overflow-hidden relative">
-        
-        {/* 顶部标签栏 */}
-        <div className="h-10 bg-slate-100 border-b border-slate-200 flex items-end px-1 gap-0.5 overflow-x-auto custom-scrollbar flex-shrink-0">
-          {activeTabs.length === 0 ? (
-             <div className="text-[11px] font-bold text-slate-400 mb-2 ml-4 flex items-center tracking-widest">
-               <Shield size={12} className="mr-1.5"/> 资源调度已就绪，等待注入进程...
-             </div>
-          ) : (
-            activeTabs.map(tab => (
-              <div 
-                key={tab.id} onClick={() => setCurrentTabId(tab.id)}
-                className={`group relative h-8 px-3 min-w-[120px] max-w-[180px] flex items-center justify-between rounded-t-lg cursor-pointer transition-all border-t border-l border-r
-                  ${currentTabId === tab.id ? 'bg-white border-slate-200 text-slate-800 font-bold z-10 before:absolute before:bottom-[-1px] before:left-0 before:w-full before:h-px before:bg-white' : 'bg-slate-200 border-transparent text-slate-500 hover:bg-slate-300'}`}
-              >
-                <div className="flex items-center overflow-hidden mr-2">
-                   {tab.avatar ? (
-                     <img src={tab.avatar} className="w-3.5 h-3.5 rounded object-cover mr-1.5" />
-                   ) : (
-                     <div className="w-3.5 h-3.5 rounded bg-slate-400 flex items-center justify-center text-[8px] text-white font-bold mr-1.5">{tab.platform[0]}</div>
-                   )}
-                  <span className="text-xs truncate select-none">{tab.title}</span>
+      {/* 右侧：态势感知大屏面板 */}
+      <div className="flex-1 bg-slate-900 flex flex-col min-w-0 min-h-0 overflow-hidden relative">
+        <div className="flex-1 flex items-center justify-center">
+          {bindingStatus ? (
+            bindingStatus.done ? (
+              <div className={`flex flex-col items-center space-y-4 p-8 rounded-2xl border shadow-lg z-50 ${bindingStatus.success ? 'bg-emerald-50/90 border-emerald-500/50' : 'bg-amber-50/90 border-amber-500/50'} backdrop-blur-md`}>
+                <div className={`w-16 h-16 rounded-full flex items-center justify-center ${bindingStatus.success ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>
+                  {bindingStatus.success ? <Shield size={28} /> : <X size={28} />}
                 </div>
-                <button onClick={(e) => handleCloseTab(e, tab.id)} className={`p-0.5 rounded-md hover:bg-slate-200 hover:text-red-500 transition ${currentTabId === tab.id ? 'text-slate-400' : 'text-transparent group-hover:text-slate-400'}`}><X size={12} /></button>
+                <div className="text-center">
+                  <h3 className={`text-lg font-bold mb-1 ${bindingStatus.success ? 'text-emerald-900' : 'text-amber-900'}`}>
+                    {bindingStatus.success ? '节点注入成功' : '部署异常'}
+                  </h3>
+                  <p className="text-sm text-slate-600">{bindingStatus.message || '操作已完成'}</p>
+                </div>
+                <button onClick={() => setBindingStatus(null)} className="px-6 py-2 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-black transition">返回调度舱</button>
               </div>
-            ))
-          )}
-        </div>
-
-        {/* Browser 核心渲染区 */}
-        <div className="flex-1 relative bg-white min-h-0 min-w-0 overflow-hidden">
-          {activeTabs.length === 0 ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300">
-               <Chrome size={48} className="mb-3 opacity-30" />
-               <h3 className="text-sm font-bold tracking-widest mb-1">隔离浏览器内核已启动</h3>
-               <p className="text-[11px] font-medium">请点击左侧平台账户查看数据</p>
-            </div>
+            ) : (
+              <div className="flex flex-col items-center space-y-6 p-10 rounded-3xl border border-indigo-500/30 bg-indigo-950/20 backdrop-blur-xl z-50 animate-in fade-in zoom-in-95 duration-300 shadow-[0_0_50px_rgba(99,102,241,0.2)]">
+                <div className="relative">
+                  <div className="w-24 h-24 rounded-full bg-indigo-500/20 flex items-center justify-center border border-indigo-400/50">
+                    {bindingStatus.mode === 'cookie' ? <ShieldAlert size={48} className="text-rose-400 animate-pulse" /> : <Chrome size={48} className="text-indigo-400 animate-pulse" />}
+                  </div>
+                  <div className={`absolute -inset-2 rounded-full border-2 border-t-transparent animate-spin ${bindingStatus.mode === 'cookie' ? 'border-rose-500/20 border-r-rose-500' : 'border-indigo-500/20 border-l-indigo-500'}`}></div>
+                </div>
+                <div className="text-center space-y-3">
+                  <h3 className="text-xl font-bold text-white tracking-tight flex items-center justify-center gap-3">
+                    {bindingStatus.mode === 'cookie' ? <ShieldAlert size={20} className="text-rose-400" /> : <ExternalLink size={20} className="text-indigo-400" />} 
+                    {bindingStatus.mode === 'cookie' ? '正在执行底层环境洗白...' : '正在调起隔离环境...'}
+                  </h3>
+                  <p className="text-sm text-slate-400 max-w-sm leading-relaxed">
+                    {bindingStatus.mode === 'cookie' 
+                        ? <>系统正在后台隐形重载 <span className="text-rose-400 font-mono font-bold uppercase">{bindingStatus.platform}</span> 的安全容器，强制下发防风控凭证，请稍候...</>
+                        : <>系统正在为 <span className="text-indigo-400 font-mono font-bold uppercase">{bindingStatus.platform}</span> 创建独立的指纹容器环境，请在弹出的浏览器中进行操作。</>}
+                  </p>
+                  <div className="pt-4 flex justify-center">
+                    <span className="px-4 py-2 bg-indigo-500/10 border border-indigo-500/20 rounded-full text-xs font-mono text-indigo-300 flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-ping"></div>
+                      SESSION ACTIVE: {formatElapsed()}
+                    </span>
+                  </div>
+                </div>
+                <button onClick={() => setBindingStatus(null)} className="text-xs text-slate-500 hover:text-red-400 transition-colors uppercase tracking-widest font-bold border-b border-transparent hover:border-red-400 pb-0.5">终止进程</button>
+              </div>
+            )
           ) : (
-            activeTabs.map(tab => (
-              <webview
-                key={tab.id}
-                src={tab.url}
-                partition={tab.partition}
-                allowpopups="true"
-                className={`absolute inset-0 w-full h-full border-none outline-none bg-white transition-opacity duration-150 ${currentTabId === tab.id ? 'z-10 opacity-100' : 'z-0 opacity-0 pointer-events-none'}`}
-              />
-            ))
+            <div className="absolute inset-0 w-full h-full bg-[#050A15] overflow-hidden flex items-center justify-center font-mono select-none">
+              <style>{`
+                @keyframes radar-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                @keyframes orbit-slow { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+                @keyframes float-up { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+                @keyframes float-down { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(10px); } }
+                @keyframes pulse-glow { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.8; box-shadow: 0 0 30px rgba(99,102,241,0.6); } }
+                .glass-panel { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(99, 102, 241, 0.2); }
+              `}</style>
+              
+              <div className="absolute inset-0 z-0 opacity-20" 
+                   style={{ 
+                     backgroundImage: 'linear-gradient(rgba(99, 102, 241, 0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(99, 102, 241, 0.1) 1px, transparent 1px)', 
+                     backgroundSize: '40px 40px',
+                     backgroundPosition: 'center center'
+                   }}>
+              </div>
+
+              <div className="relative w-[500px] h-[500px] flex items-center justify-center z-10">
+                <div className="absolute inset-0 border border-indigo-500/10 rounded-full animate-[radar-spin_25s_linear_infinite]"></div>
+                <div className="absolute inset-8 border border-cyan-500/10 rounded-full animate-[orbit-slow_20s_linear_infinite] border-dashed"></div>
+                <div className="absolute inset-16 border border-emerald-500/10 rounded-full animate-[radar-spin_15s_linear_infinite]"></div>
+                
+                <div className="absolute inset-0 rounded-full animate-[radar-spin_4s_linear_infinite]" 
+                     style={{ background: 'conic-gradient(from 0deg, transparent 70%, rgba(99,102,241,0.1) 95%, rgba(99,102,241,0.4) 100%)' }}>
+                </div>
+
+                <div className="absolute inset-0 animate-[radar-spin_25s_linear_infinite]">
+                  <div className="absolute top-0 left-1/2 w-2 h-2 bg-indigo-400 rounded-full shadow-[0_0_10px_#818cf8]"></div>
+                  <div className="absolute bottom-1/4 right-0 w-1.5 h-1.5 bg-cyan-400 rounded-full shadow-[0_0_10px_#22d3ee]"></div>
+                </div>
+                <div className="absolute inset-8 animate-[orbit-slow_20s_linear_infinite]">
+                  <div className="absolute bottom-0 left-1/4 w-2 h-2 bg-emerald-400 rounded-full shadow-[0_0_10px_#34d399]"></div>
+                </div>
+
+                <div className="relative w-32 h-32 flex items-center justify-center animate-[pulse-glow_3s_ease-in-out_infinite] rounded-full bg-indigo-950 border border-indigo-500/50">
+                  <div className="absolute inset-2 rounded-full border border-indigo-400/30 border-t-indigo-400 animate-spin"></div>
+                  <Globe size={40} className="text-indigo-400" />
+                </div>
+              </div>
+
+              <div className="absolute left-8 top-1/4 glass-panel p-4 rounded-xl w-64 animate-[float-up_6s_ease-in-out_infinite] z-20">
+                <div className="flex items-center gap-2 mb-3 pb-2 border-b border-indigo-500/20">
+                  <Activity size={16} className="text-cyan-400" />
+                  <span className="text-cyan-400 text-xs font-bold uppercase tracking-wider">Node Status</span>
+                </div>
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-400">活跃矩阵点</span>
+                    <span className="text-white font-black">{accounts.length} <span className="text-slate-500 text-[10px]">Nodes</span></span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-400">网络连通性</span>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
+                      <span className="text-emerald-400">100% 极速</span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-400">并发线程池</span>
+                    <span className="text-indigo-400">Idle / Ready</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="absolute right-8 bottom-1/4 glass-panel p-4 rounded-xl w-64 animate-[float-down_7s_ease-in-out_infinite] z-20">
+                <div className="flex items-center gap-2 mb-3 pb-2 border-b border-indigo-500/20">
+                  <Shield size={16} className="text-emerald-400" />
+                  <span className="text-emerald-400 text-xs font-bold uppercase tracking-wider">Stealth Radar</span>
+                </div>
+                <div className="space-y-3 text-xs">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400">协议伪装层</span>
+                    <span className="bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded text-[10px]">ACTIVE</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400">API 提取引擎</span>
+                    <span className="bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded text-[10px]">ONLINE</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400">DOM 爆破探针</span>
+                    <span className="bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded text-[10px]">STANDBY</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="absolute bottom-12 flex flex-col items-center z-20 w-full">
+                <div className="glass-panel px-8 py-4 rounded-2xl flex flex-col items-center text-center shadow-[0_10px_40px_rgba(0,0,0,0.5)]">
+                  <h2 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-cyan-300 to-emerald-400 tracking-[0.2em] mb-2">
+                    全域聚合调度驾驶舱
+                  </h2>
+                  <p className="text-xs text-slate-400 max-w-md tracking-wider">
+                    底层 <span className="text-cyan-400">Playwright 容器</span> 与 <span className="text-indigo-400">环境洗白引擎</span> 已就绪。<br/>
+                    请点击左侧的 <span className="text-indigo-400 font-bold">「+ 加账号」</span> 注入新的媒体资产。
+                  </p>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </div>
 
       {/* 新建分组弹窗 */}
       {showGroupModal && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all animate-in zoom-in-95">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
               <h3 className="text-base font-bold text-slate-900 flex items-center"><FolderPlus className="mr-2 text-indigo-500" size={16}/>新建分组</h3>
               <button onClick={() => setShowGroupModal(false)} className="p-1 hover:bg-slate-200 rounded-md text-slate-500 transition"><X size={16} /></button>
             </div>
             <div className="p-5 space-y-4">
-              <input autoFocus className="w-full bg-slate-50 border border-slate-200 rounded-lg p-3 outline-none focus:border-indigo-500 font-bold text-slate-900 text-sm" placeholder="例如：游戏自媒体矩阵" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter') submitNewGroup(); }} />
+              <input autoFocus className="w-full bg-slate-50 border border-slate-200 rounded-lg p-3 outline-none focus:border-indigo-500 font-bold text-slate-900 text-sm" placeholder="例如：游戏自媒体矩阵" value={newGroupName} onChange={e => setNewGroupName(e.value)} onKeyDown={(e) => { if(e.key === 'Enter') submitNewGroup(); }} />
               <button onClick={submitNewGroup} className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-bold text-sm shadow-md hover:bg-indigo-700 transition">确认创建</button>
             </div>
           </div>
@@ -426,23 +572,51 @@ export default function AccountManagerView({ accounts, setAccounts }) {
 
       {/* 选择平台入网弹窗 */}
       {showModal && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="text-base font-bold text-slate-900">{modalStep === 1 ? '添加社交账号节点' : '自定义资产标签'}</h3>
-              <button onClick={() => { setShowModal(false); setModalStep(1); }} className="p-1 hover:bg-slate-200 rounded-md text-slate-500 transition"><X size={16} /></button>
+              <h3 className="text-base font-bold text-slate-900">
+                {modalStep === 1 ? '添加社交账号节点' : (modalStep === 3 ? '环境协议夺舍' : '自定义资产标签')}
+              </h3>
+              <button onClick={() => { setShowModal(false); setModalStep(1); setCookieStr(''); }} className="p-1 hover:bg-slate-200 rounded-md text-slate-500 transition"><X size={16} /></button>
             </div>
             <div className="p-5">
-              {modalStep === 1 ? (
-                <div className="grid grid-cols-4 gap-3 max-h-[60vh] overflow-y-auto p-1">
-                  {platforms.map(p => (
-                    <div key={p.name} onClick={() => handlePlatformSelect(p)} className={`flex flex-col items-center p-3 border border-slate-200 rounded-xl transition hover:border-red-500 hover:bg-red-50 cursor-pointer bg-white`}>
-                      <div className={`w-10 h-10 ${p.color} rounded-lg mb-2 flex items-center justify-center text-white font-black text-lg`}>{p.isCustom ? '+' : p.name[0]}</div>
-                      <span className="text-xs font-bold text-slate-700">{p.name}</span>
+              
+              {modalStep === 1 && (
+                <>
+                  <div className="flex bg-slate-200/50 p-1 rounded-lg mb-5 max-w-[280px] mx-auto">
+                    <button onClick={() => setLoginMethod('scan')} className={`flex-1 py-1.5 text-xs font-bold rounded-md transition ${loginMethod === 'scan' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>常规扫码入网</button>
+                    <button onClick={() => setLoginMethod('cookie')} className={`flex-1 py-1.5 text-xs font-bold rounded-md transition flex items-center justify-center gap-1 ${loginMethod === 'cookie' ? 'bg-white shadow-sm text-rose-600' : 'text-slate-500 hover:text-slate-700'}`}><ShieldAlert size={12}/> CK 协议夺舍</button>
+                  </div>
+                  
+                  <div className="grid grid-cols-4 gap-3 max-h-[40vh] overflow-y-auto p-1">
+                    {platforms.map(p => (
+                      <div key={p.name} onClick={() => handlePlatformSelect(p)} className={`flex flex-col items-center p-3 border border-slate-200 rounded-xl transition hover:border-indigo-500 hover:bg-indigo-50 cursor-pointer bg-white group`}>
+                        <div className={`w-12 h-12 ${p.color} rounded-xl mb-2 flex items-center justify-center text-white font-black text-xl shadow-sm group-hover:scale-110 transition-transform`}>{p.isCustom ? '+' : p.name[0]}</div>
+                        <span className="text-xs font-bold text-slate-700">{p.name}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {loginMethod === 'scan' && (
+                    <div className="mt-4 pt-4 border-t border-slate-100 max-w-lg mx-auto">
+                        <div className="relative">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <Globe size={14} className="text-slate-400" />
+                            </div>
+                            <input 
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 p-3 outline-none focus:border-indigo-500 font-mono text-slate-700 text-xs" 
+                                placeholder="专属代理IP (选填) 格式: IP:端口:账:密" 
+                                value={formData.proxy || ''}
+                                onChange={e => setFormData({ ...formData, proxy: e.target.value })} 
+                            />
+                        </div>
                     </div>
-                  ))}
-                </div>
-              ) : (
+                  )}
+                </>
+              )}
+
+              {modalStep === 2 && (
                 <div className="space-y-4 max-w-md mx-auto">
                   {selectedPlatform?.isCustom && (
                     <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
@@ -451,9 +625,64 @@ export default function AccountManagerView({ accounts, setAccounts }) {
                     </div>
                   )}
                   <input className="w-full bg-white border border-slate-200 rounded-lg p-3 outline-none focus:border-indigo-500 font-bold text-slate-900 text-sm" placeholder="账号备注名 (必填)" onChange={e => setFormData({ ...formData, alias: e.target.value })} />
-                  <button onClick={handleAddSubmit} className="w-full bg-red-600 text-white py-3 rounded-lg font-bold text-sm shadow-md transition flex items-center justify-center mt-2 hover:bg-red-700"><Lock size={14} className="mr-1.5" />确认添加</button>
+                  
+                  <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <Globe size={14} className="text-slate-400" />
+                      </div>
+                      <input 
+                          className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 p-3 outline-none focus:border-indigo-500 font-mono text-slate-700 text-xs" 
+                          placeholder="专属代理IP (选填) 例: 192.168.1.1:8080:user:pass" 
+                          value={formData.proxy || ''}
+                          onChange={e => setFormData({ ...formData, proxy: e.target.value })} 
+                      />
+                  </div>
+
+                  <button onClick={handleAddSubmit} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold text-sm shadow-md transition flex items-center justify-center mt-2 hover:bg-indigo-700"><Lock size={14} className="mr-1.5" />确认添加</button>
                 </div>
               )}
+
+              {modalStep === 3 && (
+                <div className="space-y-4 max-w-lg mx-auto animate-in fade-in slide-in-from-bottom-2">
+                  <div className="text-center mb-2">
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-rose-50 text-rose-600 rounded-full text-xs font-bold border border-rose-100">
+                          <Shield size={12}/> 目标接管平台: {selectedPlatform?.name}
+                      </span>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
+                    💡 <span className="font-bold">支持两种数据格式：</span><br/>
+                    1. 浏览器插件导出的 <b>JSON</b> 数组。<br/>
+                    2. 网络抓包提取的 <b>Header 字符串</b> (例如 <code>a1=xx; web_session=yy;</code>)。
+                  </div>
+                  <textarea 
+                      autoFocus
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-200 transition-all text-xs font-mono h-32 custom-scrollbar placeholder:text-slate-400" 
+                      placeholder="在此处粘贴包含授权凭证的 Cookie 数据..." 
+                      value={cookieStr} 
+                      onChange={e => setCookieStr(e.target.value)} 
+                  />
+
+                  <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <Globe size={14} className="text-slate-400" />
+                      </div>
+                      <input 
+                          className="w-full bg-white border border-slate-300 rounded-lg pl-9 p-3 outline-none focus:border-rose-500 font-mono text-slate-700 text-xs" 
+                          placeholder="专属代理IP (选填) 例: 192.168.1.1:8080:user:pass" 
+                          value={formData.proxy || ''}
+                          onChange={e => setFormData({ ...formData, proxy: e.target.value })} 
+                      />
+                  </div>
+
+                  <div className="flex gap-3 pt-2">
+                    <button onClick={() => { setModalStep(1); setCookieStr(''); }} className="px-5 py-3 bg-slate-100 text-slate-600 rounded-lg font-bold text-sm hover:bg-slate-200 transition">返回</button>
+                    <button onClick={handleCookieSubmit} className="flex-1 bg-rose-600 text-white py-3 rounded-lg font-bold text-sm shadow-md shadow-rose-500/30 transition flex items-center justify-center hover:bg-rose-700 hover:shadow-rose-500/50">
+                        <ShieldAlert size={16} className="mr-2" /> 强制夺舍并洗白环境
+                    </button>
+                  </div>
+                </div>
+              )}
+
             </div>
           </div>
         </div>
