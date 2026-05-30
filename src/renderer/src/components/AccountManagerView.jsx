@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, Users, Trash2, ChevronRight, X, Lock, Edit, ChevronDown, GripVertical, FolderPlus, Shield, Chrome, Loader2, ExternalLink, Globe, ShieldAlert, Activity, ChevronLeft, RotateCw } from 'lucide-react';
+import { Plus, Users, Trash2, ChevronRight, X, Lock, Edit, ChevronDown, GripVertical, FolderPlus, Shield, Chrome, Loader2, ExternalLink, Globe, ShieldAlert, Activity, ChevronLeft, RotateCw, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 
 const getElectron = () => {
   if (typeof window !== 'undefined' && window.electron) return window.electron;
@@ -35,6 +35,15 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
 
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
+
+  const [isAccountListCollapsed, setIsAccountListCollapsed] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('account_list_collapsed') || 'false'); } catch { return false; }
+  });
+  const toggleAccountList = () => {
+    const next = !isAccountListCollapsed;
+    setIsAccountListCollapsed(next);
+    localStorage.setItem('account_list_collapsed', JSON.stringify(next));
+  };
 
   const [bindingStatus, setBindingStatus] = useState(null);
   
@@ -415,10 +424,14 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
     <div className="flex h-full w-full rounded-xl overflow-hidden shadow-sm border border-slate-200 bg-white animate-in fade-in duration-300">
       
       {/* 左侧：隔离矩阵库 */}
+      {!isAccountListCollapsed && (
       <div className="w-[270px] bg-slate-50 border-r border-slate-200 flex flex-col flex-shrink-0 min-h-0">
         <div className="p-4 bg-white border-b border-slate-200 flex-shrink-0">
-          <h2 className="text-sm font-bold text-slate-800 mb-3 flex items-center">
-            <Users size={16} className="mr-2 text-indigo-600" /> 隔离矩阵库
+          <h2 className="text-sm font-bold text-slate-800 mb-3 flex items-center justify-between">
+            <span className="flex items-center"><Users size={16} className="mr-2 text-indigo-600" /> 隔离矩阵库</span>
+            <button onClick={toggleAccountList} className="p-1 rounded-md hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition" title="折叠列表">
+              <PanelLeftClose size={14} />
+            </button>
           </h2>
           <div className="flex gap-2">
             <button onClick={() => setShowGroupModal(true)} className="flex-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 py-1.5 rounded-lg text-xs font-medium flex items-center justify-center transition">
@@ -557,6 +570,17 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
           ))}
         </div>
       </div>
+      )}
+      {isAccountListCollapsed && (
+        <div className="w-[44px] bg-slate-50 border-r border-slate-200 flex flex-col items-center flex-shrink-0 py-3 gap-3 min-h-0">
+          <button onClick={toggleAccountList} className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition" title="展开列表">
+            <PanelLeftOpen size={16} />
+          </button>
+          <span className="text-[10px] font-black text-slate-400" style={{ writingMode: 'vertical-rl' }}>
+            矩阵{accounts.length}
+          </span>
+        </div>
+      )}
 
       {/* 右侧：多标签浏览器 + 仪表盘 */}
       <div className="flex-1 bg-slate-900 flex flex-col min-w-0 min-h-0 overflow-hidden relative">

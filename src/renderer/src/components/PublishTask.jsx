@@ -3,7 +3,7 @@ import {
   Plus, Video, Trash2, Edit, Globe, Scissors, Wand2, Hash, AtSign, MapPin,
   ShoppingBag, Eye, Settings, ToggleRight, Bot, Shield, Rss, Smile, Link as LinkIcon,
   FolderOpen, Activity, Loader2, Radio, MessageCircle, CheckCircle2,
-  ChevronRight, Sparkles, RefreshCw,
+  ChevronRight, Sparkles, RefreshCw, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import MediaLibraryPanel from './MediaLibraryPanel';
 import AIFillPanel from './AIFillPanel';
@@ -74,13 +74,23 @@ const PlatformHeader = ({ platform }) => {
 };
 
 // 🚨 接收了 setActiveTab，方便发完视频瞬间跳转发布队列
-export default function PublishTask({ accounts, videoList, setVideoList, activeVideoId, setActiveVideoId, publishHistory, setPublishHistory, setActiveTab, publishStep, setPublishStep, publishEditorTab, setPublishEditorTab, publishWorkbenchVideos, setPublishWorkbenchVideos, publishIsDryRun, setPublishIsDryRun }) {
+export default function PublishTask({ accounts, videoList, setVideoList, activeVideoId, setActiveVideoId, publishHistory, setPublishHistory, setActiveTab, publishStep, setPublishStep, publishEditorTab, setPublishEditorTab, publishWorkbenchVideos, setPublishWorkbenchVideos, publishIsDryRun, setPublishIsDryRun, isPublishFullscreen, setIsPublishFullscreen }) {
   const electron = getElectron();
   const videoRef = useRef(null);
   const { addToast } = useToast();
 
   const activeVideo = videoList.find(v => v.id === activeVideoId);
   const [syncTasks, setSyncTasks] = useState([]);
+
+  // ─── 队列面板折叠 ───
+  const [isQueueCollapsed, setIsQueueCollapsed] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('publish_queue_collapsed') || 'false'); } catch { return false; }
+  });
+  const toggleQueueCollapsed = () => {
+    const next = !isQueueCollapsed;
+    setIsQueueCollapsed(next);
+    localStorage.setItem('publish_queue_collapsed', JSON.stringify(next));
+  };
 
   // ─── RPA 实时内嵌视图 ───
   const rpaDockRef = useRef(null);
@@ -654,170 +664,299 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       );
     }
 
-// ==================== 🔥 2. 快手（已完全对齐最新截图 + 挂商品） ====================
+// ==================== 🔥 2. 快手（cp.kuaishou.com 1:1 原生复刻） ====================
 if (activeEditorTab === '快手') {
+  const ksTitle = pConfig.title ?? uConfig.title ?? '';
+  const ksDesc = pConfig.desc ?? uConfig.desc ?? '';
+  const now = new Date();
+  const timeStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
   return (
-    <div className="bg-[#f5f6f7] min-h-full animate-in fade-in duration-300 py-6 pb-32 font-sans px-4 sm:px-8">
-      <div className="max-w-[840px] w-full mx-auto space-y-5">
-        <PlatformHeader platform={activeEditorTab} />
+    <div className="min-h-full bg-[#f5f6f7] flex font-sans text-[14px] text-[#333] animate-in fade-in duration-300">
+      {/* ========== 左：核心编辑区 ========== */}
+      <div className="flex-1 min-w-0 overflow-y-auto pb-24">
+        <div className="px-6 pt-5 max-w-[720px] space-y-5">
 
-        <div className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-[#e3e4e5] space-y-8">
-          
-          {/* 作品描述 */}
-          <div className="flex items-start">
-            <div className="w-[100px] text-[14px] text-[#666] mt-2">作品描述</div>
-            <div className="flex-1">
-              <div className="border border-[#e5e5e5] rounded-md overflow-hidden focus-within:border-[#FF7700] transition-colors bg-white">
-                <textarea
-                  className="w-full h-36 p-4 text-[14px] text-[#333] outline-none resize-none bg-transparent placeholder-[#ccc]"
-                  placeholder="作品描述不会写？试试智能文案"
-                  value={pConfig.desc ?? uConfig.desc}
-                  onChange={e => updateConfig('快手', 'desc', e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 🔥 关联商品（已存在） */}
-          <div className="flex items-start">
-            <div className="w-[100px] text-[14px] text-[#666] mt-2 flex items-center">
-              关联商品 <span className="text-[#ccc] ml-1 text-[11px] border border-[#ccc] rounded-full w-3.5 h-3.5 flex items-center justify-center cursor-help">?</span>
-            </div>
-            <div className="flex-1">
-              <div className="border border-[#e5e5e5] rounded-lg bg-[#fcfcfc] p-4 focus-within:border-[#FF7700]">
-                <input 
-                  className="w-full bg-transparent outline-none text-[14px] text-[#333] placeholder-[#999]" 
-                  placeholder="输入商品ID / 商品链接 / 商品名称（支持搜索）" 
-                  value={pConfig.productLink || ''} 
-                  onChange={e => updateConfig('快手', 'productLink', e.target.value)} 
-                />
-                <div className="text-[12px] text-[#999] mt-2 flex items-center">
-                  <ShoppingBag size={14} className="mr-1" /> 
-                  挂载后用户可直接点击购买，提升带货转化
+          {/* ─── 1. 作品描述 + AI 栏 ─── */}
+          <section>
+            <label className="text-[14px] text-[#666] mb-2 block">作品描述</label>
+            <div className="border border-[#e5e5e5] rounded-md overflow-hidden focus-within:border-[#FF7700] transition-colors bg-white">
+              <textarea
+                className="w-full h-[140px] p-4 text-[14px] text-[#333] outline-none resize-none bg-transparent placeholder-[#ccc] leading-relaxed"
+                placeholder="作品描述不会写？试试智能文案"
+                value={ksDesc}
+                onChange={e => updateConfig('快手', 'desc', e.target.value)}
+              />
+              {/* AI 辅助栏 */}
+              <div className="border-t border-[#f0f0f0] bg-[#fafafa] px-4 py-3">
+                <div className="flex items-center gap-3 mb-2">
+                  <button className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-[#e5e5e5] rounded-full text-[12px] text-[#666] hover:border-[#FF7700] hover:text-[#FF7700] transition">
+                    <Sparkles size={13} /> 智能文案
+                  </button>
+                  <button className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-[#e5e5e5] rounded-full text-[12px] text-[#666] hover:border-[#FF7700] hover:text-[#FF7700] transition">
+                    <Hash size={13} /> 智能话题
+                  </button>
+                  <button className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-[#e5e5e5] rounded-full text-[12px] text-[#666] hover:border-[#FF7700] hover:text-[#FF7700] transition">
+                    <AtSign size={13} /> 好友
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[11px] text-[#999]">推荐:</span>
+                  {['#这才是男人该玩的打火机','#是时候该露一手了','#给你看个好东西','#zippo打火机'].map(t => (
+                    <span key={t} className="text-[11px] text-[#FF7700] bg-orange-50 px-2 py-0.5 rounded cursor-pointer hover:bg-orange-100 transition">{t}</span>
+                  ))}
+                  <span className="text-[11px] text-[#999] cursor-pointer hover:text-[#FF7700]">全部</span>
                 </div>
               </div>
             </div>
-          </div>
+          </section>
 
-          {/* 🔥 发布设置（完全对齐你最新截图） */}
-          <div className="pt-6 border-t border-[#f5f5f5]">
-            <h3 className="text-[16px] font-bold text-[#333] mb-6">发布设置</h3>
-
-            {/* 互动设置 */}
-            <div className="mb-6">
-              <div className="text-[14px] text-[#333] mb-3 font-bold">互动设置</div>
-              <div className="flex flex-wrap gap-x-8 gap-y-3">
-                <label className="flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    className="w-5 h-5 accent-[#FF7700] mr-2" 
-                    checked={pConfig.allowDuet ?? true} 
-                    onChange={e => updateConfig('快手', 'allowDuet', e.target.checked)}
-                  />
-                  <span className="text-[14px] text-[#333]">允许别人跟我拍同框</span>
-                </label>
-                <label className="flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    className="w-5 h-5 accent-[#FF7700] mr-2" 
-                    checked={pConfig.allowDownload ?? true} 
-                    onChange={e => updateConfig('快手', 'allowDownload', e.target.checked)}
-                  />
-                  <span className="text-[14px] text-[#333]">允许下载此作品</span>
-                </label>
-                <label className="flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    className="w-5 h-5 accent-[#FF7700] mr-2" 
-                    checked={pConfig.showCity ?? true} 
-                    onChange={e => updateConfig('快手', 'showCity', e.target.checked)}
-                  />
-                  <span className="text-[14px] text-[#333]">作品展示在同城页</span>
-                </label>
-              </div>
-            </div>
-
-            {/* 查看权限 */}
-            <div className="mb-6">
-              <div className="text-[14px] text-[#333] mb-3 font-bold">查看权限</div>
-              <div className="flex gap-8">
-                <label className="flex items-center cursor-pointer">
-                  <input 
-                    type="radio" 
-                    name="ks_vis" 
-                    className="accent-[#FF7700] mr-2" 
-                    checked={pConfig.visibility === 'public' || !pConfig.visibility} 
-                    onChange={() => updateConfig('快手', 'visibility', 'public')}
-                  />
-                  <span className="text-[14px] text-[#333]">所有人可见</span>
-                </label>
-                <label className="flex items-center cursor-pointer">
-                  <input 
-                    type="radio" 
-                    name="ks_vis" 
-                    className="accent-[#FF7700] mr-2" 
-                    checked={pConfig.visibility === 'friend'} 
-                    onChange={() => updateConfig('快手', 'visibility', 'friend')}
-                  />
-                  <span className="text-[14px] text-[#333]">好友可见</span>
-                </label>
-                <label className="flex items-center cursor-pointer">
-                  <input 
-                    type="radio" 
-                    name="ks_vis" 
-                    className="accent-[#FF7700] mr-2" 
-                    checked={pConfig.visibility === 'private'} 
-                    onChange={() => updateConfig('快手', 'visibility', 'private')}
-                  />
-                  <span className="text-[14px] text-[#333]">仅自己可见</span>
-                </label>
-              </div>
-            </div>
-
-            {/* 发布时间 */}
-            <div>
-              <div className="text-[14px] text-[#333] mb-3 font-bold">发布时间</div>
-              <div className="flex gap-8">
-                <label className="flex items-center cursor-pointer">
-                  <input 
-                    type="radio" 
-                    name="ks_time" 
-                    className="accent-[#FF7700] mr-2" 
-                    checked={!pConfig.scheduled} 
-                    onChange={() => updateConfig('快手', 'scheduled', false)}
-                  />
-                  <span className="text-[14px] text-[#333]">立即发布</span>
-                </label>
-                <label className="flex items-center cursor-pointer">
-                  <input 
-                    type="radio" 
-                    name="ks_time" 
-                    className="accent-[#FF7700] mr-2" 
-                    checked={pConfig.scheduled} 
-                    onChange={() => updateConfig('快手', 'scheduled', true)}
-                  />
-                  <span className="text-[14px] text-[#333]">定时发布</span>
-                  <span className="ml-1 text-[#999] text-xs cursor-help">?</span>
-                </label>
-              </div>
-
-              {pConfig.scheduled && (
-                <div className="mt-4">
-                  <input 
-                    type="datetime-local" 
-                    className="border border-[#e5e5e5] rounded p-3 text-[14px] text-[#333] w-full sm:w-auto focus:border-[#FF7700]" 
-                    value={pConfig.scheduleTime || ''} 
-                    onChange={e => updateConfig('快手', 'scheduleTime', e.target.value)} 
-                  />
+          {/* ─── 2. 活动推荐 ─── */}
+          <section>
+            <label className="text-[14px] text-[#666] mb-2 flex items-center gap-1 block">活动推荐</label>
+            <div className="space-y-2">
+              {[
+                { img: 'https://p23-plat.wsukwai.com/udata/pkg/ai-cover-SQEvnndV-1779937849581.png?x-kcdn-pid=112531', title: '你应该出去看看' },
+                { img: 'https://p23-plat.wsukwai.com/udata/pkg/ai-cover-WaPfITdX-1780044292859.png?x-kcdn-pid=112531', title: '一个普通的下午' },
+              ].map((act, i) => (
+                <div key={i} className="flex items-center gap-3 bg-white border border-[#eee] rounded-lg p-2.5 hover:border-[#FF7700]/30 transition cursor-pointer">
+                  <img src={act.img} alt="" className="w-12 h-12 rounded object-cover flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13px] font-medium text-[#333]">{act.title}</div>
+                  </div>
+                  <span className="text-[12px] text-[#666] flex items-center gap-1 flex-shrink-0">去领取 <ChevronRight size={14} /></span>
                 </div>
+              ))}
+              <div className="text-[12px] text-[#999] cursor-pointer hover:text-[#FF7700]">全部</div>
+            </div>
+          </section>
+
+          {/* ─── 3. 封面设置 ─── */}
+          <section>
+            <label className="text-[14px] text-[#666] mb-2 flex items-center gap-1 block">封面设置</label>
+            <div className="bg-white border border-[#eee] rounded-lg p-4">
+              <div className="flex gap-4">
+                {/* 当前封面 */}
+                <div className="w-[120px] h-[160px] bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 relative cursor-pointer border-2 border-dashed border-gray-200 hover:border-[#FF7700] flex items-center justify-center">
+                  {activeVideo?.config?.universal?.coverUrl ? (
+                    <img src={activeVideo.config.universal.coverUrl} className="w-full h-full object-cover" alt="" />
+                  ) : (
+                    <span className="text-[11px] text-gray-400">点击上传封面</span>
+                  )}
+                </div>
+                {/* 智能推荐封面 */}
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] text-[#666] mb-2 font-medium">智能推荐封面</div>
+                  <div className="flex gap-2">
+                    {[1,2,3].map(i => (
+                      <div key={i} className="w-[80px] h-[106px] bg-gray-100 rounded-lg border border-gray-100 cursor-pointer hover:border-[#FF7700] flex items-center justify-center text-[11px] text-gray-400">
+                        推荐{i}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              {/* PK 封面 */}
+              <div className="flex items-center justify-end mt-3 pt-3 border-t border-[#f5f5f5]">
+                <span className="text-[12px] text-[#666] mr-3">PK封面</span>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" className="sr-only peer" onChange={e => updateConfig('快手', 'pkCover', e.target.checked)} />
+                  <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#FF7700]" />
+                </label>
+              </div>
+            </div>
+          </section>
+
+          {/* ─── 4. 作者服务 ─── */}
+          <section className="flex items-center gap-3">
+            <label className="text-[14px] text-[#666] flex-shrink-0">作者服务</label>
+            <select className="w-[168px] border border-[#e5e5e5] rounded px-3 py-2 text-[13px] text-[#333] outline-none focus:border-[#FF7700] bg-white mr-2" value={pConfig.authorService || ''} onChange={e => updateConfig('快手', 'authorService', e.target.value)}>
+              <option value="">选择服务类型</option>
+              <option value="ecom">电商带货</option>
+              <option value="live">直播预约</option>
+              <option value="course">付费课程</option>
+            </select>
+            <input className="flex-1 border border-[#e5e5e5] rounded px-3 py-2 text-[13px] text-[#999] outline-none focus:border-[#FF7700] bg-[#f5f5f5] placeholder-[#999]" placeholder="关联成功可获得更多收益" disabled />
+          </section>
+
+          {/* ─── 5. 作者声明 ─── */}
+          <section className="flex items-center gap-3">
+            <label className="text-[14px] text-[#666] flex-shrink-0">作者声明</label>
+            <select className="flex-1 border border-[#e5e5e5] rounded px-3 py-2 text-[13px] text-[#333] outline-none focus:border-[#FF7700] bg-white" value={pConfig.authorDeclare || ''} onChange={e => updateConfig('快手', 'authorDeclare', e.target.value)}>
+              <option value="">为作品添加补充说明</option>
+              <option value="original">原创内容</option>
+              <option value="ai">包含AI生成内容</option>
+              <option value="ad">包含商业推广</option>
+            </select>
+          </section>
+
+          {/* ─── 6. 添加地点 ─── */}
+          <section className="flex items-center gap-3">
+            <label className="text-[14px] text-[#666] flex-shrink-0">添加地点</label>
+            <select className="w-[168px] border border-[#e5e5e5] rounded px-3 py-2 text-[13px] text-[#333] outline-none focus:border-[#FF7700] bg-white mr-2" value={pConfig.poi || ''} onChange={e => updateConfig('快手', 'poi', e.target.value)}>
+              <option value="">请选择所在地区</option>
+              <option value="北京">北京</option>
+              <option value="上海">上海</option>
+              <option value="广州">广州</option>
+              <option value="深圳">深圳</option>
+            </select>
+            <input className="flex-1 border border-[#e5e5e5] rounded px-3 py-2 text-[13px] text-[#999] outline-none focus:border-[#FF7700] bg-[#f5f5f5] placeholder-[#999]" placeholder="请输入视频详细地址，让同城老铁看见你" disabled />
+          </section>
+
+          {/* ─── 7. 发布设置 ─── */}
+          <section className="mt-2">
+            <h3 className="text-[16px] font-bold text-[#333] mb-4">发布设置</h3>
+            <div className="bg-white border border-[#eee] rounded-lg p-5 space-y-5">
+
+              {/* 互动设置 */}
+              <div>
+                <label className="text-[14px] text-[#333] font-bold mb-3 block">互动设置</label>
+                <div className="flex flex-wrap gap-x-8 gap-y-2">
+                  {[
+                    { key: 'allowDuet', label: '允许别人跟我拍同框', def: true },
+                    { key: 'allowDownload', label: '允许下载此作品', def: true },
+                    { key: 'showCity', label: '作品展示在同城页', def: true },
+                  ].map(item => (
+                    <label key={item.key} className="flex items-center cursor-pointer">
+                      <input type="checkbox" className="w-4 h-4 accent-[#FF7700] mr-2" checked={pConfig[item.key] ?? item.def} onChange={e => updateConfig('快手', item.key, e.target.checked)} />
+                      <span className="text-[14px] text-[#333]">{item.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* 查看权限 */}
+              <div>
+                <label className="text-[14px] text-[#333] font-bold mb-3 block">查看权限</label>
+                <div className="flex gap-8">
+                  {[
+                    { val: 'public', label: '所有人可见' },
+                    { val: 'friend', label: '好友可见' },
+                    { val: 'private', label: '仅自己可见' },
+                  ].map(opt => (
+                    <label key={opt.val} className="flex items-center cursor-pointer">
+                      <input type="radio" name="ks_vis" className="accent-[#FF7700] mr-2" checked={pConfig.visibility === opt.val || (!pConfig.visibility && opt.val === 'public')} onChange={() => updateConfig('快手', 'visibility', opt.val)} />
+                      <span className="text-[14px] text-[#333]">{opt.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* 发布时间 */}
+              <div>
+                <label className="text-[14px] text-[#333] font-bold mb-3 block">发布时间</label>
+                <div className="flex gap-8">
+                  <label className="flex items-center cursor-pointer">
+                    <input type="radio" name="ks_time" className="accent-[#FF7700] mr-2" checked={!pConfig.scheduled} onChange={() => updateConfig('快手', 'scheduled', false)} />
+                    <span className="text-[14px] text-[#333]">立即发布</span>
+                  </label>
+                  <label className="flex items-center cursor-pointer">
+                    <input type="radio" name="ks_time" className="accent-[#FF7700] mr-2" checked={!!pConfig.scheduled} onChange={() => updateConfig('快手', 'scheduled', true)} />
+                    <span className="text-[14px] text-[#333]">定时发布</span>
+                  </label>
+                </div>
+                {pConfig.scheduled && (
+                  <input type="datetime-local" className="mt-3 border border-[#e5e5e5] rounded p-2.5 text-[13px] text-[#333] outline-none focus:border-[#FF7700] w-[240px]" value={pConfig.scheduleTime || ''} onChange={e => updateConfig('快手', 'scheduleTime', e.target.value)} />
+                )}
+                {/* 粉丝活跃高峰提示 */}
+                <div className="mt-3 flex items-center gap-2 bg-orange-50 border border-orange-100 rounded-lg px-3 py-2">
+                  <span className="text-[18px]">⏰</span>
+                  <span className="text-[12px] text-[#cc6600] flex-1">你的粉丝在20:00到21:00点活跃，在该时间发布可提升流量～</span>
+                  <button className="text-[11px] text-[#FF7700] font-medium hover:underline flex-shrink-0">一键设置</button>
+                </div>
+              </div>
+
+            </div>
+          </section>
+
+          {/* ─── 底部按钮 ─── */}
+          <div className="flex justify-center gap-4 pt-4 pb-8">
+            <button className="w-[96px] h-[36px] bg-white border border-[#e5e5e5] text-[#333] rounded-full text-[13px] font-medium hover:bg-[#f5f5f5] transition">取消</button>
+            <button onClick={() => handlePublish('快手')} className="w-[96px] h-[36px] bg-[#FF7700] text-white rounded-full text-[13px] font-medium hover:bg-[#e66a00] transition active:scale-95 shadow-[0_2px_8px_rgba(255,119,0,0.3)]">发布</button>
+          </div>
+        </div>
+      </div>
+
+      {/* ========== 中：手机预览 ========== */}
+      <div className="w-[375px] flex-shrink-0 bg-[#f5f6f7] overflow-y-auto border-l border-[#e8e8e8] py-5 px-4 hidden xl:block">
+        <div className="sticky top-5">
+          <div className="bg-white rounded-[40px] p-2.5 shadow-[0_8px_30px_rgba(0,0,0,0.08)] border-[5px] border-[#1a1a1a] mx-auto" style={{ width: 280 }}>
+            {/* Tab 切换 */}
+            <div className="flex bg-[#f0f0f0] p-1 rounded-full text-[12px] font-medium mb-2.5">
+              {['预览封面','预览作品'].map((tab, i) => (
+                <button key={tab} className={`flex-1 py-1.5 rounded-full transition ${i === 1 ? 'bg-white shadow-sm text-[#333]' : 'text-[#999]'}`}>{tab}</button>
+              ))}
+            </div>
+            {/* 视频预览 */}
+            <div className="bg-black rounded-2xl overflow-hidden relative aspect-[9/16] max-h-[420px]">
+              {activeVideo?.url ? (
+                <video src={activeVideo.url} className="w-full h-full object-cover" controlsList="nodownload" loop muted />
+              ) : (
+                <div className="w-full h-full bg-[#1a1a1a] flex items-center justify-center text-[11px] text-gray-500">视频预览</div>
               )}
+              {/* Play 按钮 */}
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="w-11 h-11 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>
+                </div>
+              </div>
+              {/* 右侧互动按钮 */}
+              <div className="absolute right-2 bottom-16 flex flex-col items-center gap-3 text-white">
+                <div className="w-8 h-8 bg-white/20 rounded-full border border-white/40" />
+                {[{icon:'♡',label:'赞'},{icon:'☆',label:'收藏'},{icon:'💬',label:'评论'}].map(item => (
+                  <div key={item.label} className="flex flex-col items-center gap-0.5">
+                    <span className="text-lg leading-none">{item.icon}</span>
+                    <span className="text-[9px]">{item.label}</span>
+                  </div>
+                ))}
+              </div>
+              {/* 底部信息 */}
+              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-3 pt-8">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <div className="w-6 h-6 rounded-full bg-gray-500 border border-white/50 flex-shrink-0" />
+                  <span className="text-white text-[11px] font-medium">@潮玩一族</span>
+                  <span className="text-white/60 text-[10px] ml-auto flex-shrink-0 px-2 py-0.5 bg-white/15 rounded-full text-[9px] border border-white/20">关注</span>
+                </div>
+                {ksTitle && <p className="text-white text-[11px] leading-tight line-clamp-2">{ksTitle}</p>}
+                <p className="text-white/60 text-[10px] mt-0.5">{ksDesc?.slice(0, 40)}{(ksDesc?.length||0) > 40 ? '...' : ''}</p>
+              </div>
             </div>
           </div>
+          {/* 重新上传 */}
+          <div className="flex justify-center mt-3">
+            <button className="flex items-center gap-1.5 px-4 py-2 border border-[#ddd] rounded-full text-[12px] text-[#666] hover:border-[#FF7700] hover:text-[#FF7700] transition bg-white">
+              <RefreshCw size={13} /> 重新上传
+            </button>
+          </div>
+        </div>
+      </div>
 
-          {/* 底部按钮 */}
-          <div className="pt-6 pb-8 flex justify-center gap-4 border-t border-[#e3e4e5] mt-6">
-            <button className="px-10 py-2.5 bg-white text-[#333] border border-[#e5e5e5] rounded-xl text-[14px] font-bold hover:bg-[#f5f5f5] transition shadow-sm">取消</button>
-            <button onClick={() => handlePublish('快手')} className="px-12 py-2.5 bg-[#FF7700] text-white rounded-xl shadow-md text-[14px] font-bold hover:bg-[#e66a00] transition active:scale-95">发布至快手</button>
+      {/* ========== 右：创作助手 ========== */}
+      <div className="w-[260px] flex-shrink-0 border-l border-[#e8e8e8] bg-white overflow-y-auto py-5 px-4 hidden 2xl:block">
+        <div className="sticky top-5">
+          <div className="flex items-center gap-2 mb-4 pb-3 border-b border-[#f0f0f0]">
+            <span className="text-[16px]">🤖</span>
+            <span className="text-[13px] font-bold text-[#333]">创作助手</span>
+          </div>
+          <div className="text-[12px] text-[#999] leading-relaxed mb-4">发文助手为你护航，检查笔记是否符合社区规范</div>
+          <button className="w-full py-2.5 bg-[#f5f5f5] text-[#333] rounded-full text-[12px] font-medium hover:bg-[#eee] transition mb-3">开始检测</button>
+          <div className="text-center text-[11px] text-[#ccc] mb-5">今日剩余 10 次</div>
+
+          {/* 流量提升建议 */}
+          <div>
+            <h4 className="text-[13px] font-bold text-[#333] mb-3">流量提升建议</h4>
+            {[
+              { icon: '📝', title: '去优化标题', desc: '为了让更多人搜索到你的作品，建议使用智能推荐标题' },
+              { icon: '⏰', title: '在粉丝浏览高峰期发布', desc: '你的粉丝一般会在20:00-21:00浏览作品' },
+            ].map((tip, i) => (
+              <div key={i} className="mb-3 last:mb-0">
+                <div className="flex items-center gap-2 text-[12px] font-medium text-[#333] hover:text-[#FF7700] cursor-pointer transition">
+                  <span>{tip.icon}</span>
+                  <span>{tip.title}</span>
+                  <ChevronRight size={14} className="ml-auto text-[#ccc]" />
+                </div>
+                <p className="text-[11px] text-[#999] mt-1 ml-6">{tip.desc}</p>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -1417,11 +1556,15 @@ return (
       {currentStep === 2 && (
       <div className="flex gap-4 pb-2 flex-1 overflow-hidden px-4">
       {/* 左侧：批量待发素材列队区 */}
+      {!isPublishFullscreen && !isQueueCollapsed && (
       <div className="w-[260px] bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col flex-shrink-0">
-        <div className="p-4 border-b border-slate-100 bg-slate-50">
-          <div className="text-xs font-black text-slate-500 uppercase tracking-wider text-center">
+        <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+          <div className="text-xs font-black text-slate-500 uppercase tracking-wider">
             待发队列 ({videoList.length})
           </div>
+          <button onClick={toggleQueueCollapsed} className="p-1 rounded-md hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition" title="折叠队列">
+            <PanelLeftClose size={14} />
+          </button>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
           {videoList.length === 0 ? (
@@ -1450,6 +1593,17 @@ return (
           )}
         </div>
       </div>
+      )}
+      {!isPublishFullscreen && isQueueCollapsed && (
+        <div className="w-[44px] bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col items-center flex-shrink-0 py-3 gap-3">
+          <button onClick={toggleQueueCollapsed} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition" title="展开队列">
+            <PanelLeftOpen size={16} />
+          </button>
+          <span className="text-[10px] font-black text-slate-400 writing-vertical" style={{ writingMode: 'vertical-rl' }}>
+            队列{videoList.length}
+          </span>
+        </div>
+      )}
 
       {/* 中间：千人千面工作站（左右分栏 + 空间优化） */}
       <div className="flex-1 bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden min-w-[450px]">
@@ -1478,6 +1632,13 @@ return (
                   {!activeVideo.config.universal.coverUrl ? <span className="text-[10px] text-slate-500 text-center px-4">物理封面占位图</span> : <img src={activeVideo.config.universal.coverUrl} className="w-full h-full object-cover" alt="封面" />}
                 </div>
               </div>
+              <button
+                onClick={() => setIsPublishFullscreen(!isPublishFullscreen)}
+                className="absolute right-3 top-3 p-2 rounded-lg hover:bg-slate-200 text-slate-400 hover:text-slate-700 transition"
+                title={isPublishFullscreen ? '退出全屏' : '沉浸全屏编辑'}
+              >
+                {isPublishFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              </button>
             </div>
             <div className="flex flex-1 overflow-hidden">
               <div className="w-[72px] bg-slate-50 border-r border-slate-200 flex flex-col items-center flex-shrink-0 overflow-y-auto py-4 gap-4 shadow-[2px_0_10px_rgba(0,0,0,0.02)]">
@@ -1560,6 +1721,7 @@ return (
       </div>
 
       {/* 右侧：目标账号 + 发射塔 */}
+      {!isPublishFullscreen && (
       <div className="w-80 flex flex-col gap-4 flex-shrink-0">
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden border-t-4 border-t-slate-900 h-1/2">
           <div className="p-3 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
@@ -1650,6 +1812,7 @@ return (
           </div>
         </div>
       </div>
+      )}
     </div>
       )}
     </div>

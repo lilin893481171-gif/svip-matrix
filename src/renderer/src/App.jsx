@@ -246,6 +246,7 @@ export default function App() {
   const [activeVideoId, setActiveVideoId] = useState(null);
   const [publishHistory, setPublishHistory] = useState([]);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isPublishFullscreen, setIsPublishFullscreen] = useState(false);
   const [sidebarPrefs, setSidebarPrefs] = useState(() => {
     try { return JSON.parse(localStorage.getItem('nikola_sidebar_prefs') || '{}'); }
     catch { return {}; }
@@ -260,6 +261,14 @@ export default function App() {
   const [publishEditorTab, setPublishEditorTab] = useState('universal');
   const [publishWorkbenchVideos, setPublishWorkbenchVideos] = useState([]);
   const [publishIsDryRun, setPublishIsDryRun] = useState(true);
+
+  // ─── 全屏沉浸编辑 Esc 退出 ───
+  useEffect(() => {
+    if (!isPublishFullscreen) return;
+    const handleKey = (e) => { if (e.key === 'Escape') setIsPublishFullscreen(false); };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isPublishFullscreen]);
 
   // 🌟🌟🌟 渐进式拦截核心状态
   const [isPhoneBound, setIsPhoneBound] = useState(false);
@@ -417,6 +426,7 @@ export default function App() {
           <BindPhoneModal onClose={handleBindModalClose} onBound={() => setIsPhoneBound(true)} />
         )}
 
+        {!isPublishFullscreen && (
         <div className={`bg-slate-950 text-slate-300 flex flex-col shadow-2xl z-20 transition-all border-r border-slate-900 flex-shrink-0 ${isSidebarCollapsed ? 'w-20' : 'w-64'}`}>
           <div className="h-20 flex items-center px-4 border-b border-slate-800/50">
             <div className="w-10 h-10 rounded-lg bg-white flex items-center justify-center mr-3 shadow-lg shadow-red-600/30 overflow-hidden p-0.5">
@@ -452,8 +462,8 @@ export default function App() {
                 <Shield size={12} className="mr-2 text-red-500" /> 物理隔离已激活
               </div>
             )}
-            <button 
-              onClick={() => setIsLoggedIn(false)} 
+            <button
+              onClick={() => setIsLoggedIn(false)}
               className="text-slate-500 hover:text-red-500 transition flex items-center w-full p-2 hover:bg-slate-900 rounded-lg group"
             >
               <LogOut size={18} className="mr-2 group-hover:rotate-180 transition-all duration-300" />
@@ -461,8 +471,10 @@ export default function App() {
             </button>
           </div>
         </div>
+        )}
 
         <div className="flex-1 flex flex-col h-full overflow-hidden relative bg-slate-100/50">
+          {!isPublishFullscreen && (
           <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6 z-10 shadow-sm flex-shrink-0">
             <div className="font-bold text-slate-700 text-lg">
               {activeTab === 'publish' && '千人千面超级工作站 (12平台 1:1 原生复刻)'}
@@ -474,11 +486,12 @@ export default function App() {
               <span className="text-sm font-bold text-slate-700">超级管理员</span>
             </div>
           </header>
+          )}
 
-          <div className="flex-1 overflow-y-auto p-4">
+          <div className={`flex-1 overflow-y-auto ${isPublishFullscreen ? 'p-0' : 'p-4'}`}>
             {activeTab === 'dashboard' && <StatisticsView setActiveTab={setActiveTab} />}
             {activeTab === 'accounts' && <AccountManagerView accounts={accounts} setAccounts={setAccounts} browserTabs={browserTabs} setBrowserTabs={setBrowserTabs} activeTabId={activeTabId} setActiveTabId={setActiveTabId} />}
-            {activeTab === 'publish' && <PublishTask setActiveTab={setActiveTab} accounts={accounts} videoList={videoList} setVideoList={setVideoList} activeVideoId={activeVideoId} setActiveVideoId={setActiveVideoId} publishHistory={publishHistory} setPublishHistory={setPublishHistory} publishStep={publishStep} setPublishStep={setPublishStep} publishEditorTab={publishEditorTab} setPublishEditorTab={setPublishEditorTab} publishWorkbenchVideos={publishWorkbenchVideos} setPublishWorkbenchVideos={setPublishWorkbenchVideos} publishIsDryRun={publishIsDryRun} setPublishIsDryRun={setPublishIsDryRun} />}
+            {activeTab === 'publish' && <PublishTask setActiveTab={setActiveTab} accounts={accounts} videoList={videoList} setVideoList={setVideoList} activeVideoId={activeVideoId} setActiveVideoId={setActiveVideoId} publishHistory={publishHistory} setPublishHistory={setPublishHistory} publishStep={publishStep} setPublishStep={setPublishStep} publishEditorTab={publishEditorTab} setPublishEditorTab={setPublishEditorTab} publishWorkbenchVideos={publishWorkbenchVideos} setPublishWorkbenchVideos={setPublishWorkbenchVideos} publishIsDryRun={publishIsDryRun} setPublishIsDryRun={setPublishIsDryRun} isPublishFullscreen={isPublishFullscreen} setIsPublishFullscreen={setIsPublishFullscreen} />}
             {activeTab === 'history' && <PublishHistoryView videoList={videoList} setVideoList={setVideoList} publishHistory={publishHistory} setActiveTab={setActiveTab} setActiveVideoId={setActiveVideoId} />}
             {activeTab === 'monitor' && <RiskControl/>}
             {activeTab === 'interact' && <InteractionView accounts={accounts} />}
