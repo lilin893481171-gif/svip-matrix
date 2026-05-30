@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import localforage from 'localforage';
+import { cfApiUrl, authHeaders } from '../../config/matrixConfig';
 
 // 1. 创建 Context
 const AiTaskContext = createContext();
@@ -8,13 +9,10 @@ const AiTaskContext = createContext();
 export const useAiTasks = () => useContext(AiTaskContext);
 
 // 3. 全局 Provider 组件
-export const AiTaskProvider = ({ children }) => {
+export const AiTaskProvider = ({ children, isPhoneBound, onRequestBind }) => {
   const [messages, setMessages] = useState([]);
-  const [pendingTasks, setPendingTasks] = useState([]); 
-  const abortControllers = useRef({}); 
-
-  const GATEWAY_URL = 'https://myapp.nikolaboy.com';
-  const MOCK_TOKEN = 'matrix-test-token-123';
+  const [pendingTasks, setPendingTasks] = useState([]);
+  const abortControllers = useRef({});
 
   // 软件启动时加载硬盘记录
   useEffect(() => {
@@ -28,8 +26,18 @@ export const AiTaskProvider = ({ children }) => {
     if (messages.length > 0) localforage.setItem('matrix_chat_history', messages);
   }, [messages]);
 
+  // 🔒 统一守卫 — 所有 AI 任务提交的唯一安检入口
+  const guardDispatch = () => {
+    if (!isPhoneBound) {
+      if (onRequestBind) onRequestBind();
+      return false;
+    }
+    return true;
+  };
+
   // 🌟 核心调度引擎
   const dispatchTask = async (taskConfig) => {
+    if (!guardDispatch()) return;
     const { input, generateType, modelId, modelName, finalPrompt, modelParams = {}, attachments = {} } = taskConfig;
     const aiMsgId = Date.now() + 1;
     
@@ -50,9 +58,9 @@ export const AiTaskProvider = ({ children }) => {
     abortControllers.current[msgId] = controller;
 
     try {
-      const response = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
+      const response = await fetch(cfApiUrl('/v1/chat/completions'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Matrix-Token': MOCK_TOKEN },
+        headers: authHeaders(),
         body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: input }], stream: true }),
         signal: controller.signal
       });
@@ -201,11 +209,11 @@ export const AiTaskProvider = ({ children }) => {
         };
       }
 
-      console.log("【Matrix 战时日志】已成功解密全模态装甲字典，准备向网关发射 Payload:", JSON.stringify(finalPayload, null, 2));
+      console.log("【System Log】任务载荷已准备就绪:", JSON.stringify(finalPayload, null, 2));
 
-      const submitRes = await fetch(`${GATEWAY_URL}/piapi/api/v1/task`, {
+      const submitRes = await fetch(cfApiUrl('/piapi/api/v1/task'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Matrix-Token': MOCK_TOKEN },
+        headers: authHeaders(),
         body: JSON.stringify(finalPayload)
       });
 
@@ -224,9 +232,9 @@ export const AiTaskProvider = ({ children }) => {
       while (!isFinished && pollCount < 150) { 
         await new Promise(r => setTimeout(r, 4000));
         pollCount++;
-        const fetchRes = await fetch(`${GATEWAY_URL}/piapi/api/v1/task/${taskId}`, {
+        const fetchRes = await fetch(cfApiUrl(`/piapi/api/v1/task/${taskId}`), {
           method: 'GET',
-          headers: { 'Content-Type': 'application/json', 'X-Matrix-Token': MOCK_TOKEN }
+          headers: authHeaders()
         });
         const fetchData = await fetchRes.json();
         const status = fetchData.data?.status;
@@ -273,7 +281,7 @@ export const AiTaskProvider = ({ children }) => {
 
   return (
     <AiTaskContext.Provider value={{ 
-      messages, setMessages, dispatchTask, interruptLatestText, clearCache, pendingTasks
+      messages, setMessages, dispatchTask, guardDispatch, interruptLatestText, clearCache, pendingTasks
     }}>
       {children}
     </AiTaskContext.Provider>

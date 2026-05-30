@@ -1,18 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import DeepSeekCopilot from './components/DeepSeekCopilot';
 import AccountManagerView from './components/AccountManagerView';
 import RiskControl from './components/RiskControl';
 import Dashboard from './components/Dashboard';
 import PublishTask from './components/PublishTask';
 import PublishHistoryView from './components/PublishHistoryView';
-import InteractionView from './components/InteractionView'; 
+import InteractionView from './components/InteractionView';
 import AiHubView from "./components/AiHub/AiHubView";
 import { AiTaskProvider } from './components/AiHub/AiTaskContext'; // 引入大脑
+import { ToastProvider, useToast } from './components/ToastContext';
 
 import logoImg from './assets/logo.png';
 import { 
   Users, Send, Activity, MessageSquare, PieChart, 
-  LogOut, Shield, AlignLeft, Sparkles, ChevronRight, Archive, Bot, Smartphone, Gift, X,
+  LogOut, Shield, AlignLeft, ChevronRight, Archive, Bot, Smartphone, Gift, X,
   QrCode, RefreshCw, Check // 🌟 新增了扫码登录需要的图标
 } from 'lucide-react';
 
@@ -20,6 +20,87 @@ const getElectron = () => {
   if (typeof window !== 'undefined' && window.electron) return window.electron;
   return { ipcRenderer: { invoke: async () => ({}), on: () => {}, removeAllListeners: () => {} } };
 };
+
+// IPC Toast 监听桥 — 让主进程也能推送 toast 到渲染进程
+function ToastBridge() {
+  const toast = useToast();
+  useEffect(() => {
+    const electron = getElectron();
+    const cleanup = electron.ipcRenderer.on('toast-notification', ({ type, title, message }) => {
+      toast.addToast(type, title, message);
+    });
+    return () => { if (cleanup) cleanup(); };
+  }, [toast]);
+  return null;
+}
+
+// 手机号绑定弹窗 — 独立组件直接使用 useToast
+function BindPhoneModal({ onClose, onBound }) {
+  const { addToast } = useToast();
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onBound();
+    onClose();
+    addToast('success', '绑定成功', '已为您下发 100 点初始算力金，请尽情创作吧！');
+  };
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/80 backdrop-blur-md">
+      <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full mx-4 relative overflow-hidden">
+        <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-red-50 to-white -z-10"></div>
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
+        >
+          <X size={20} />
+        </button>
+        <div className="flex flex-col items-center text-center mt-2 relative">
+          <div className="w-16 h-16 bg-gradient-to-br from-red-500 to-rose-600 rounded-2xl flex items-center justify-center shadow-lg shadow-red-500/30 mb-6">
+            <Gift size={32} className="text-white" />
+          </div>
+          <h3 className="text-2xl font-black text-slate-800 mb-2 tracking-tight">激活算力引擎</h3>
+          <p className="text-sm font-medium text-slate-500 mb-8 leading-relaxed">
+            为了保障服务安全及遵守相关实名规定，<br/>
+            绑定手机号后，我们将为您自动下发 <strong className="text-red-500">100 点算力金</strong>。
+          </p>
+          <form onSubmit={handleSubmit} className="w-full space-y-4" noValidate>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                <Smartphone size={18} className="text-slate-400" />
+              </div>
+              <input
+                type="tel"
+                placeholder="请输入中国大陆手机号码"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3.5 pl-11 pr-4 text-sm text-slate-800 outline-none focus:border-red-500 focus:ring-4 focus:ring-red-500/10 transition-all font-medium placeholder:font-normal"
+              />
+            </div>
+            <div className="flex space-x-2">
+              <input
+                type="text"
+                placeholder="验证码"
+                className="flex-1 bg-slate-50 border border-slate-200 rounded-xl py-3.5 px-4 text-sm text-slate-800 outline-none focus:border-red-500 focus:ring-4 focus:ring-red-500/10 transition-all font-medium placeholder:font-normal"
+              />
+              <button
+                type="button"
+                className="w-28 bg-slate-100 text-slate-600 font-bold text-xs rounded-xl hover:bg-slate-200 transition-colors"
+              >
+                获取验证码
+              </button>
+            </div>
+            <button
+              type="submit"
+              className="w-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white font-black py-4 rounded-xl shadow-lg shadow-red-500/20 active:scale-[0.98] transition-all mt-2"
+            >
+              立即绑定并领取算力
+            </button>
+          </form>
+          <p className="text-[11px] text-slate-400 mt-6">
+            点击绑定即表示您同意《Matrix AI 服务协议》及《隐私条款》
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const handleImageError = (e) => {
   e.target.onerror = null;
@@ -84,8 +165,8 @@ function LoginScreen({ onLogin }) {
           <img src={logoImg} alt="LOGO" className="w-full h-full object-contain" onError={handleImageError} />
         </div>
         
-        <h2 className="text-white font-black text-2xl tracking-widest uppercase">YuMatrixAI</h2>
-        <p className="text-red-500 text-xs font-bold mt-2 mb-8 tracking-widest">高端社交管理系统</p>
+        <h2 className="text-white font-black text-2xl tracking-widest uppercase">YuMatrix Studio</h2>
+        <p className="text-red-500 text-xs font-bold mt-2 mb-8 tracking-widest">多平台内容矩阵管理工作室</p>
 
         {/* ================= 微信扫码通道 ================= */}
         {loginMode === 'wechat' ? (
@@ -164,12 +245,29 @@ export default function App() {
   const [videoList, setVideoList] = useState([]);
   const [activeVideoId, setActiveVideoId] = useState(null);
   const [publishHistory, setPublishHistory] = useState([]);
-  const [isCopilotOpen, setIsCopilotOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [sidebarPrefs, setSidebarPrefs] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('nikola_sidebar_prefs') || '{}'); }
+    catch { return {}; }
+  });
+
+  // ─── 多标签内嵌浏览器状态（提升到 App 层，跨视图存活）───
+  const [browserTabs, setBrowserTabs] = useState([]);
+  const [activeTabId, setActiveTabId] = useState(null);
+
+  // ─── PublishTask 跨视图状态保持 ───
+  const [publishStep, setPublishStep] = useState(0);
+  const [publishEditorTab, setPublishEditorTab] = useState('universal');
+  const [publishWorkbenchVideos, setPublishWorkbenchVideos] = useState([]);
+  const [publishIsDryRun, setPublishIsDryRun] = useState(true);
 
   // 🌟🌟🌟 渐进式拦截核心状态
-  const [isPhoneBound, setIsPhoneBound] = useState(false); 
-  const [showBindModal, setShowBindModal] = useState(false); 
+  const [isPhoneBound, setIsPhoneBound] = useState(false);
+  const [showBindModal, setShowBindModal] = useState(false);
+
+  const handleBindModalClose = () => {
+    setShowBindModal(false);
+  };
 
   const activeVideo = videoList.find(v => v.id === activeVideoId);
 
@@ -236,125 +334,87 @@ export default function App() {
     return () => { if (electron.ipcRenderer.removeAllListeners) electron.ipcRenderer.removeAllListeners('task-progress-update'); };
   }, [isLoggedIn]);
 
-  // 🌟 处理手机号绑定提交 (模拟)
-  const handlePhoneSubmit = (e) => {
-    e.preventDefault();
-    setIsPhoneBound(true);
-    setShowBindModal(false);
-    alert('🎉 绑定成功！已为您下发 100 点初始算力金，请尽情创作吧！');
+  // 🤖 智能折叠侧边栏（方案F：默认策略 + 用户手动记忆）
+  // 概览型页面默认展开，工作型/查看型默认折叠；用户手动切换后永久记住
+  useEffect(() => {
+    const defaults = {
+      dashboard: false,   // 数据罗盘：展开，信息概览
+      accounts: false,    // 账号矩阵：展开，多信息浏览
+      publish: true,      // 发布台：折叠，需要大面积操作区
+      aihub: true,        // AI 引擎：折叠，工具面板密集
+      monitor: true,      // 风控：折叠
+      interact: true,     // 评论总控：折叠
+      history: true,      // 发布历史：折叠
+    };
+    if (sidebarPrefs.hasOwnProperty(activeTab)) {
+      setIsSidebarCollapsed(sidebarPrefs[activeTab]);
+    } else {
+      setIsSidebarCollapsed(defaults[activeTab] ?? true);
+    }
+  }, [activeTab, sidebarPrefs]);
+
+  const toggleSidebar = () => {
+    const next = !isSidebarCollapsed;
+    setIsSidebarCollapsed(next);
+    const prefs = { ...sidebarPrefs, [activeTab]: next };
+    setSidebarPrefs(prefs);
+    localStorage.setItem('nikola_sidebar_prefs', JSON.stringify(prefs));
   };
+
+  // ─── 内嵌浏览器跨视图存活：离开账户页时仅分离不销毁 ───
+  useEffect(() => {
+    if (activeTab !== 'accounts' && activeTabId !== null) {
+      const electron = getElectron();
+      electron.ipcRenderer.send('detach-account-browser', { accountId: String(activeTabId) });
+    }
+  }, [activeTab, activeTabId]);
+
+  // ─── 恢复已存在的浏览器会话（应用启动或切回账户页时）───
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    const electron = getElectron();
+    electron.ipcRenderer.invoke('get-active-sessions').then(sessions => {
+      if (!sessions || sessions.length === 0) return;
+      setBrowserTabs(prev => {
+        const existing = new Set(prev.map(t => String(t.accountId)));
+        const restored = sessions
+          .filter(s => !existing.has(String(s.accountId)))
+          .map(s => {
+            const acc = accounts.find(a => String(a.id) === String(s.accountId));
+            return {
+              accountId: s.accountId,
+              platform: acc?.platform || '',
+              alias: acc?.alias || '',
+              url: s.currentUrl || ''
+            };
+          });
+        return restored.length > 0 ? [...prev, ...restored] : prev;
+      });
+    });
+  }, [isLoggedIn, accounts]);
+
+  // ─── 监听主进程推送的 URL 变更 ───
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    const electron = getElectron();
+    const cleanup = electron.ipcRenderer.on('account-browser-url-changed', ({ accountId, url }) => {
+      setBrowserTabs(prev => prev.map(t =>
+        String(t.accountId) === String(accountId) ? { ...t, url } : t
+      ));
+    });
+    return () => { if (cleanup) cleanup(); };
+  }, [isLoggedIn]);
 
   if (!isLoggedIn) return <LoginScreen onLogin={() => setIsLoggedIn(true)} />;
 
   return (
-    <AiTaskProvider>
+    <ToastProvider>
+      <ToastBridge />
+      <AiTaskProvider isPhoneBound={isPhoneBound} onRequestBind={() => setShowBindModal(true)}>
       <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden select-none relative">
-        
-        {/* 🌟🌟🌟 新增：高级感的手机号拦截绑定弹窗 */}
+
         {showBindModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-md animate-in fade-in">
-            <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full mx-4 relative overflow-hidden animate-in zoom-in-95">
-              
-              {/* 装饰性背景 */}
-              <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-red-50 to-white -z-10"></div>
-              
-              <button 
-                onClick={() => setShowBindModal(false)}
-                className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
-              >
-                <X size={20} />
-              </button>
-
-              <div className="flex flex-col items-center text-center mt-2 relative">
-                <div className="w-16 h-16 bg-gradient-to-br from-red-500 to-rose-600 rounded-2xl flex items-center justify-center shadow-lg shadow-red-500/30 mb-6">
-                  <Gift size={32} className="text-white" />
-                </div>
-                
-                <h3 className="text-2xl font-black text-slate-800 mb-2 tracking-tight">激活算力引擎</h3>
-                <p className="text-sm font-medium text-slate-500 mb-8 leading-relaxed">
-                  为了保障服务安全及遵守相关实名规定，<br/>
-                  绑定手机号后，我们将为您自动下发 <strong className="text-red-500">100 点算力金</strong>。
-                </p>
-
-                <form onSubmit={handlePhoneSubmit} className="w-full space-y-4">
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                      <Smartphone size={18} className="text-slate-400" />
-                    </div>
-                    <input 
-                      type="tel" 
-                      placeholder="请输入中国大陆手机号码" 
-                      required
-                      pattern="[1][3-9][0-9]{9}"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3.5 pl-11 pr-4 text-sm text-slate-800 outline-none focus:border-red-500 focus:ring-4 focus:ring-red-500/10 transition-all font-medium placeholder:font-normal"
-                    />
-                  </div>
-                  
-                  <div className="flex space-x-2">
-                    <input 
-                      type="text" 
-                      placeholder="验证码" 
-                      required
-                      className="flex-1 bg-slate-50 border border-slate-200 rounded-xl py-3.5 px-4 text-sm text-slate-800 outline-none focus:border-red-500 focus:ring-4 focus:ring-red-500/10 transition-all font-medium placeholder:font-normal"
-                    />
-                    <button 
-                      type="button" 
-                      className="w-28 bg-slate-100 text-slate-600 font-bold text-xs rounded-xl hover:bg-slate-200 transition-colors"
-                    >
-                      获取验证码
-                    </button>
-                  </div>
-
-                  <button 
-                    type="submit" 
-                    className="w-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white font-black py-4 rounded-xl shadow-lg shadow-red-500/20 active:scale-[0.98] transition-all mt-2"
-                  >
-                    立即绑定并领取算力
-                  </button>
-                </form>
-
-                <p className="text-[11px] text-slate-400 mt-6">
-                  点击绑定即表示您同意《Matrix AI 服务协议》及《隐私条款》
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 🌟 在发布页面显示带气泡引导的悬浮球 */}
-        {activeTab === 'publish' && (
-          <div className="fixed bottom-8 right-8 z-30 flex flex-col items-end gap-3">
-            {!isCopilotOpen && (
-              <div 
-                className="bg-white px-4 py-2.5 rounded-2xl shadow-2xl border border-red-100 relative animate-bounce flex items-center gap-2"
-                style={{ filter: 'drop-shadow(0 10px 15px rgba(225, 29, 72, 0.1))' }}
-              >
-                <span className="text-[13px] font-black text-slate-700 tracking-tight">
-                  选好视频后，点击我唤醒 AI 助理
-                </span>
-                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-                <div className="absolute -bottom-1 right-6 w-3 h-3 bg-white border-r border-b border-red-100 rotate-45"></div>
-              </div>
-            )}
-
-            <button
-              onClick={() => setIsCopilotOpen(true)}
-              className="w-14 h-14 bg-gradient-to-br from-red-500 to-rose-600 rounded-full shadow-2xl shadow-red-500/40 flex items-center justify-center hover:scale-110 hover:shadow-red-500/60 transition-all duration-300 group border-2 border-red-400/30"
-              title="唤醒 AI 创作助理"
-            >
-              <Sparkles className="text-white w-6 h-6 group-hover:animate-pulse" />
-            </button>
-
-            {/* 🌟 传递拦截状态给子组件 */}
-            <DeepSeekCopilot 
-              isOpen={isCopilotOpen} 
-              onClose={() => setIsCopilotOpen(false)} 
-              activeVideo={activeVideo}
-              updateConfig={updateConfigGlobal}
-              isPhoneBound={isPhoneBound}
-              onRequestBind={() => setShowBindModal(true)}
-            />
-          </div>
+          <BindPhoneModal onClose={handleBindModalClose} onBound={() => setIsPhoneBound(true)} />
         )}
 
         <div className={`bg-slate-950 text-slate-300 flex flex-col shadow-2xl z-20 transition-all border-r border-slate-900 flex-shrink-0 ${isSidebarCollapsed ? 'w-20' : 'w-64'}`}>
@@ -364,12 +424,12 @@ export default function App() {
             </div>
             {!isSidebarCollapsed && (
               <div className="flex flex-col">
-                <span className="text-base font-black text-white tracking-widest uppercase">YuMatrixAI</span>
-                <span className="text-[10px] text-red-500 font-bold tracking-widest">高端社交管理系统</span>
+                <span className="text-base font-black text-white tracking-widest uppercase">YuMatrix Studio</span>
+                <span className="text-[10px] text-red-500 font-bold tracking-widest">多平台内容矩阵管理工作室</span>
               </div>
             )}
-            <button 
-              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            <button
+              onClick={toggleSidebar}
               className={`ml-auto p-2 rounded-xl hover:bg-slate-900 transition ${isSidebarCollapsed ? 'rotate-180' : ''}`}
             >
               <AlignLeft size={20} />
@@ -417,8 +477,8 @@ export default function App() {
 
           <div className="flex-1 overflow-y-auto p-4">
             {activeTab === 'dashboard' && <StatisticsView setActiveTab={setActiveTab} />}
-            {activeTab === 'accounts' && <AccountManagerView accounts={accounts} setAccounts={setAccounts} />}
-            {activeTab === 'publish' && <PublishTask setActiveTab={setActiveTab} setIsCopilotOpen={setIsCopilotOpen} accounts={accounts} videoList={videoList} setVideoList={setVideoList} activeVideoId={activeVideoId} setActiveVideoId={setActiveVideoId} publishHistory={publishHistory} setPublishHistory={setPublishHistory} />}
+            {activeTab === 'accounts' && <AccountManagerView accounts={accounts} setAccounts={setAccounts} browserTabs={browserTabs} setBrowserTabs={setBrowserTabs} activeTabId={activeTabId} setActiveTabId={setActiveTabId} />}
+            {activeTab === 'publish' && <PublishTask setActiveTab={setActiveTab} accounts={accounts} videoList={videoList} setVideoList={setVideoList} activeVideoId={activeVideoId} setActiveVideoId={setActiveVideoId} publishHistory={publishHistory} setPublishHistory={setPublishHistory} publishStep={publishStep} setPublishStep={setPublishStep} publishEditorTab={publishEditorTab} setPublishEditorTab={setPublishEditorTab} publishWorkbenchVideos={publishWorkbenchVideos} setPublishWorkbenchVideos={setPublishWorkbenchVideos} publishIsDryRun={publishIsDryRun} setPublishIsDryRun={setPublishIsDryRun} />}
             {activeTab === 'history' && <PublishHistoryView videoList={videoList} setVideoList={setVideoList} publishHistory={publishHistory} setActiveTab={setActiveTab} setActiveVideoId={setActiveVideoId} />}
             {activeTab === 'monitor' && <RiskControl/>}
             {activeTab === 'interact' && <InteractionView accounts={accounts} />}
@@ -434,5 +494,6 @@ export default function App() {
         </div>
       </div>
     </AiTaskProvider>
+    </ToastProvider>
   );
 }

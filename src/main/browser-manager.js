@@ -125,7 +125,7 @@ function parseProxyString(proxyStr) {
     }
 }
 
-function getOrCreateFingerprint(accountId) {
+function getOrCreateSessionProfile(accountId) {
     const fingerprintPath = path.join(FINGERPRINTS_DIR, `${accountId}.json.enc`);
     
     if (fs.existsSync(fingerprintPath)) {
@@ -312,7 +312,7 @@ async function humanRead(page, options = {}) {
 }
 
 // ======================================
-// 🛡️ 增强版沙盒核心函数 (纯事件驱动版，0心跳)
+// 增强版会话容器核心函数 (纯事件驱动版，0心跳)
 // ======================================
 
 export async function launchSandbox(accountId, options = {}) {
@@ -321,18 +321,18 @@ export async function launchSandbox(accountId, options = {}) {
         try {
             const pages = session.context.pages();
             if (pages.length > 0 && session.browser.isConnected()) {
-                console.warn(`⚠️ [装甲中心] 账号 [${accountId}] 沙盒已在运行，直接激活窗口`);
+                console.warn(`⚠️ [Session Manager] 账号 [${accountId}] 会话容器已在运行，直接激活窗口`);
                 try { await pages[0].bringToFront(); } catch(e){}
                 return session;
             }
         } catch (e) {}
 
-        console.log(`🧹 [装甲中心] 发现账号 [${accountId}] 的僵尸进程，正在清理...`);
+        console.log(`🧹 [Session Manager] 发现账号 [${accountId}] 的遗留进程，正在清理...`);
         try { await session.browser.close(); } catch(e) {}
         activeBrowsers.delete(accountId);
     }
 
-    console.log(`\n🛡️ [装甲中心] 正在为账号 [${accountId}] 部署隐形沙盒...`);
+    console.log(`\n🛡️ [Session Manager] 正在为账号 [${accountId}] 部署隔离会话容器...`);
 
     try {
         const fingerprintData = getOrCreateFingerprint(accountId);
@@ -382,7 +382,7 @@ export async function launchSandbox(accountId, options = {}) {
             extraHTTPHeaders: { 'accept-language': headers['accept-language'] },
             permissions: ['geolocation'],
             geolocation: options.geolocation || { latitude: 30.2741, longitude: 120.1551 },
-            // 🌟 终极装甲：将代理 IP 完美挂载到当前独立上下文中！
+            // 代理配置：将代理 IP 绑定到当前会话上下文
             proxy: options.proxy ? parseProxyString(options.proxy) : undefined
         };
 
@@ -557,7 +557,7 @@ export async function launchSandbox(accountId, options = {}) {
                 try {
                     if (browser.isConnected()) {
                         await saveAccountState(accountId, context);
-                        console.log(`📸 [装甲中心] 检测到页面跳转，瞬间抓拍并永久封存最新状态！`);
+                        console.log(`📸 [Session Manager] 检测到页面跳转，自动保存最新状态`);
                     }
                 } catch (e) {}
             }
@@ -604,12 +604,12 @@ export async function launchSandbox(accountId, options = {}) {
         const session = { browser, context, page };
         activeBrowsers.set(accountId, session);
 
-        console.log(`✅ [装甲中心] 账号 [${accountId}] 隐形沙盒部署完毕！\n`);
+        console.log(`✅ [Session Manager] 账号 [${accountId}] 隔离会话容器就绪！\n`);
 
         return session;
 
     } catch (error) {
-        console.error(`❌ [装甲中心] 账号 [${accountId}] 沙盒启动失败:`, error.message);
+        console.error(`❌ [Session Manager] 账号 [${accountId}] 会话容器启动失败:`, error.message);
         if (activeBrowsers.has(accountId)) {
             const session = activeBrowsers.get(accountId);
             try { await session.browser.close(); } catch(e) {}
@@ -622,7 +622,7 @@ export async function launchSandbox(accountId, options = {}) {
 export async function closeSandbox(accountId) {
     const session = activeBrowsers.get(accountId);
     if (!session) {
-        console.warn(`⚠️ 账号 [${accountId}] 没有运行中的沙盒`);
+        console.warn(`⚠️ 账号 [${accountId}] 没有运行中的会话容器`);
         return false;
     }
 
@@ -633,10 +633,10 @@ export async function closeSandbox(accountId) {
         await session.browser.close();
         activeBrowsers.delete(accountId);
         
-        console.log(`🛑 账号 [${accountId}] 沙盒已安全回收。\n`);
+        console.log(`🛑 账号 [${accountId}] 会话容器已安全回收。\n`);
         return true;
     } catch (error) {
-        console.error(`❌ 账号 [${accountId}] 沙盒关闭失败:`, error.message);
+        console.error(`❌ 账号 [${accountId}] 会话容器关闭失败:`, error.message);
         return false;
     }
 }
@@ -651,9 +651,9 @@ export async function saveAllStates() {
     console.log(`✅ [紧急备份] 所有账号状态保存完成\n`);
 }
 // ======================================
-// 🍪 黑卡 CK 导入与环境洗白引擎
+// Cookie 导入与登录会话初始化引擎
 // ======================================
-export async function importCookieAndWash(accountId, cookieStr, platform, options = {}) {
+export async function importCookieAndInitialize(accountId, cookieStr, platform, options = {}) {
     const domainMap = {
         '小红书': '.xiaohongshu.com',
         '抖音': '.douyin.com',
@@ -687,33 +687,33 @@ export async function importCookieAndWash(accountId, cookieStr, platform, option
         throw new Error('CK 格式解析失败，请检查格式');
     }
 
-    console.log(`\n🛡️ [CK引擎] 正在为账号 [${accountId}] 启动洗白沙盒...`);
-    // 🌟 将 proxy 透传给底层机甲！
-    const session = await launchSandbox(accountId, { headless: true, proxy: options.proxy }); 
+    console.log(`\n🛡️ [Cookie Manager] 正在为账号 [${accountId}] 启动隔离会话容器...`);
+    // 将 proxy 透传给底层会话
+    const session = await launchSandbox(accountId, { headless: true, proxy: options.proxy });
     const { context, page } = session;
 
     try {
-        // 3. 注入灵魂 (写入 Cookie)
+        // 3. 注入 Cookie
         await context.addCookies(cookies);
-        
-        // 4. 洗白预热：访问首页，让官方下发 LocalStorage
-        console.log(`[CK引擎] 正在前往 ${targetUrl} 预热环境...`);
+
+        // 4. 预热会话：访问首页，让官方下发 LocalStorage
+        console.log(`[Cookie Manager] 正在前往 ${targetUrl} 预热环境...`);
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await page.randomDelay(2000, 3000);
-        
-        // 5. 深度洗白：刷新页面，让前后端 Token 完成握手校验
-        console.log(`[CK引擎] 触发深度重载，生成合法缓存...`);
+
+        // 5. 会话握手：刷新页面，让前后端 Token 完成校验
+        console.log(`[Cookie Manager] 触发深度重载，生成合法缓存...`);
         await page.reload({ waitUntil: 'domcontentloaded' });
         await page.randomDelay(3000, 5000);
 
-        // 6. 瞬间抓拍 & 物理拔管
+        // 6. 保存状态并关闭会话
         await saveAccountState(accountId, context);
         await closeSandbox(accountId);
-        console.log(`✅ [CK引擎] 账号 [${accountId}] 环境洗白并加密固化成功！\n`);
+        console.log(`✅ [Cookie Manager] 账号 [${accountId}] 会话初始化并加密持久化成功！\n`);
         return true;
     } catch (error) {
         await closeSandbox(accountId);
-        throw new Error('洗白过程被风控拦截: ' + error.message);
+        throw new Error('会话初始化过程被平台拦截: ' + error.message);
     }
 }
 

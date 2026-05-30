@@ -15,7 +15,7 @@ async function checkAndHandleCaptcha(page) {
             return t.includes('拖动滑块') || t.includes('安全验证');
         });
         if (hasCaptcha) {
-            console.log('⚠️ [风控雷达] 前台触发安全验证，机甲紧急悬停！等待手动完成（60秒倒计时）...');
+            console.log('⚠️ [风控雷达] 前台触发安全验证，页面紧急悬停！等待手动完成（60秒倒计时）...');
             await page.waitForFunction(() => {
                 const t = document.body.innerText;
                 return !t.includes('拖动滑块') && !t.includes('安全验证');
@@ -30,7 +30,7 @@ async function checkAndHandleCaptcha(page) {
 // 1. 前台笔记雷达（获取最新发布）
 // ======================================
 export async function runVideoRadar(page, acc) {
-    console.log('\n🚀 [视觉雷达] 正在降临小红书前台个人主页...');
+    console.log('\n🚀 [视觉雷达] 正在导航至小红书前台个人主页...');
     const notes = [];
 
     try {
@@ -153,7 +153,7 @@ export async function runCommentRadar(page, db, acc) {
 // 3. 前台批量首评（笔记详情页纯前台操作）
 // ======================================
 export async function runBatchPin(page, targetVideos, replyText) {
-    console.log('\n🚀 [装甲突击] 开始执行前台矩阵首评任务...');
+    console.log('\n🚀 [执行引擎] 开始执行前台矩阵首评任务...');
     let success = 0;
 
     for (const video of targetVideos) {
@@ -174,10 +174,10 @@ export async function runBatchPin(page, targetVideos, replyText) {
                 await page.humanType(inputSelector, replyText);
                 await page.randomDelay(800, 1500);
                 
-                // 🤖 物理击发发送按钮
+                // 物理点击发送按钮
                 await page.humanClick('text="发送"');
                 success++;
-                console.log(`🔥 [击发确认] 笔记首评成功：${video.title}`);
+                console.log(`🔥 [发送确认] 笔记首评成功：${video.title}`);
                 await page.randomDelay(3000, 5000);
             } catch (err) {
                 console.log(`⚠️ 当前笔记可能禁言或无法评论跳过: ${video.title}`);
@@ -195,7 +195,7 @@ export async function runBatchPin(page, targetVideos, replyText) {
 // 4. 前台精准回复（纯前台消息中心）
 // ======================================
 export async function runReply(page, msg, replyText) {
-    console.log('\n🚀 [狙击引擎] 锁定目标靶位，执行前台消息回复...');
+    console.log('\n🚀 [执行引擎] 锁定目标靶位，执行前台消息回复...');
 
     try {
         await page.goto('https://www.xiaohongshu.com/message/mentions', { timeout: 30000 });
@@ -224,7 +224,7 @@ export async function runReply(page, msg, replyText) {
         }, { username: msg.username, content: msg.content });
 
         if (found) {
-            console.log(`🎯 目标确认锁定，准备击发...`);
+            console.log(`🎯 目标确认锁定，准备发送...`);
             await page.randomDelay(1000, 2000);
             
             const inputSelector = 'textarea[placeholder*="回复"]';
@@ -235,11 +235,11 @@ export async function runReply(page, msg, replyText) {
                 
                 // 🤖 点击可见的回复或发送按钮
                 await page.humanClick('button:visible:has-text("回复"), button:visible:has-text("发送")');
-                console.log('🔥 [狙击引擎] 精准回复击发成功！');
+                console.log('🔥 [执行引擎] 精准回复发送成功！');
             } catch (clickErr) {
                 // 如果找不到按钮，直接模拟键盘重击回车键兜底
                 await page.keyboard.press('Enter');
-                console.log('🔥 [狙击引擎] 使用硬回车击发成功！');
+                console.log('🔥 [执行引擎] 使用硬回车发送成功！');
             }
         } else {
             console.log(`⚠️ 页面内未扫描到匹配目标：[${msg.username}] 的评论`);

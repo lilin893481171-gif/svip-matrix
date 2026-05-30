@@ -40,7 +40,7 @@ export async function runVideoRadar(page, acc, randomSleep) {
         }
     });
 
-    console.log(`🎬 正在空降稿件管理大厅...`);
+    console.log(`🎬 正在导航至稿件管理大厅...`);
     await page.goto('https://member.bilibili.com/platform/upload-manager/article', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await randomSleep(page, 3000, 4500); 
 
@@ -94,7 +94,7 @@ export async function runCommentRadar(page, db, acc, randomSleep) {
         }
     });
 
-    console.log(`🎬 正在空降视频评论管理页...`);
+    console.log(`🎬 正在导航至视频评论管理页...`);
     await page.goto('https://member.bilibili.com/platform/comment/article', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await randomSleep(page, 3000, 4000);
     await page.mouse.wheel(0, 1000); 
@@ -112,7 +112,7 @@ export async function runCommentRadar(page, db, acc, randomSleep) {
 export async function runBatchPin(page, targetVideos, replyText, randomSleep) {
     let successCount = 0;
     for (const video of targetVideos) {
-        console.log(`🎬 [首发引擎] 正在空降 B站视频页: [${video.title}]`);
+        console.log(`🎬 [首发引擎] 正在导航至 B站视频页: [${video.title}]`);
         try {
             await page.goto(`https://www.bilibili.com/video/${video.id}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
             await randomSleep(page, 4000, 5000);
@@ -146,7 +146,7 @@ export async function runBatchPin(page, targetVideos, replyText, randomSleep) {
  * 4. B站：精准回复模块 (原生物理鼠标版)
  */
 export async function runReply(page, msg, replyText, randomSleep) {
-    console.log(`🚀 [降临引擎] 正在空降 B站 视频评论管理页...`);
+    console.log(`🚀 [执行引擎] 正在导航至 B站 视频评论管理页...`);
     await page.goto('https://member.bilibili.com/platform/comment/article', { waitUntil: 'domcontentloaded' });
     await randomSleep(page, 3000, 4000);
 
@@ -202,7 +202,7 @@ export async function runReply(page, msg, replyText, randomSleep) {
                 const sendBtn = page.locator('.reply-wrap button:visible').filter({ hasText: /发表回复|回复|发送/ }).first();
                 if (await sendBtn.isVisible()) await sendBtn.click();
                 else await page.keyboard.press('Enter');
-                console.log(`🔥 [降临引擎] B站回复击发成功！`);
+                console.log(`🔥 [执行引擎] B站回复发送成功！`);
             }
         } catch (e) { console.log(`❌ B站回复执行异常:`, e.message); }
     } else {

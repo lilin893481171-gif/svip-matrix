@@ -25,7 +25,7 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
     setActiveTab('publish');
   };
 
-  // 💥 触发“上帝之手”：打开监控面板
+  // 打开实时监控面板
   const handleInAppMonitor = (hist) => {
     setMonitorState({
       isOpen: true,
@@ -35,7 +35,7 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
     });
   };
 
-  // 💥 核心逻辑：向主进程发送船坞的物理坐标，让机器人画面镶嵌进来！
+  // 💥 核心逻辑：向主进程发送后台预览面板的坐标，让后台画面镶嵌进来！
   useEffect(() => {
     if (monitorState.isOpen && dockingZoneRef.current) {
       const updateBounds = () => {
@@ -72,10 +72,10 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
         <div>
           <h2 className="text-xl font-black text-slate-900 flex items-center">
             <Eye className="mr-2 text-indigo-600" size={24} /> 
-            全平台发布队列与接管中心
+            全平台发布队列与控制中心
           </h2>
           <p className="text-sm text-slate-400 mt-1 font-medium">
-            点击【内嵌接管】即可查看后台机器人的实时画面。遇到验证码可直接手动干预，干预后机器人会自动接续工作。
+            点击【手动控制】即可查看后台机器人的实时画面。遇到验证码可直接手动干预，干预后机器人会自动接续工作。
           </p>
         </div>
       </div>
@@ -153,7 +153,7 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
                           onClick={() => handleInAppMonitor(hist)} 
                           className="group relative text-white bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded-xl transition-all font-bold text-xs inline-flex items-center shadow-lg shadow-indigo-500/30 overflow-hidden active:scale-95"
                         >
-                          <MousePointerClick size={14} className="mr-1.5 animate-bounce" /> 内嵌接管
+                          <MousePointerClick size={14} className="mr-1.5 animate-bounce" /> 手动控制
                         </button>
                       ) : (
                         (hist.status === '任务失败' || hist.status === '已取消') ? (
@@ -185,7 +185,7 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
         </div>
       </div>
 
-      {/* 💥 内嵌机器人船坞 (Robot Docking Zone) 💥 */}
+      {/* 💥 内嵌后台预览面板 (Robot Docking Zone) 💥 */}
       {monitorState.isOpen && (
         <div className="absolute inset-0 bg-white z-50 rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden animate-in slide-in-from-bottom-8 duration-300">
           
@@ -196,7 +196,7 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
                 {monitorState.platform[0]}
               </div>
               <div className="flex flex-col">
-                <span className="font-bold text-sm truncate max-w-sm text-emerald-400">正在接管真实运行环境</span>
+                <span className="font-bold text-sm truncate max-w-sm text-emerald-400">正在显示实时运行环境</span>
                 <span className="text-[10px] text-slate-300 flex items-center mt-0.5">
                   <Shield size={10} className="mr-1" /> 你可以直接在此窗口进行点击或滑动验证码，机器人将自动顺延执行。
                 </span>
@@ -208,7 +208,7 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
                 onClick={() => setMonitorState({ ...monitorState, isOpen: false })}
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition shadow-md flex items-center font-bold text-xs"
               >
-                <X size={14} className="mr-1" /> 退出接管并隐藏
+                <X size={14} className="mr-1" /> 退出控制并隐藏
               </button>
             </div>
           </div>
@@ -221,7 +221,7 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
             {/* 提示层：当 BrowserView 还没贴上来时显示 */}
             <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400">
               <RefreshCw size={40} className="animate-spin mb-4 opacity-50" />
-              <p className="font-bold tracking-widest text-sm">正在将底层 RPA 机器人画面吸附至此窗口...</p>
+              <p className="font-bold tracking-widest text-sm">正在将底层 RPA 后台画面吸附至此窗口...</p>
             </div>
           </div>
         </div>

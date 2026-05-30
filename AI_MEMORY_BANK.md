@@ -1,126 +1,120 @@
 # AI_MEMORY_BANK.md
 
-> YuMatrix 项目记忆库 — 跨对话上下文传递。新对话开局必读。
+> YuMatrix 记忆库 — 跨对话上下文。新对话开局必读。
 
 ---
 
-## 1. 架构全局观
+## 1. 架构
 
 ```
 src/main/
-├── index.js                         # 主进程 + IPC + --ignore-certificate-errors
-├── account-browser-manager.js       # 👑 原生沙盒（BrowserView + CDP反指纹，零Playwright）
-├── rpa-engine.js                    # 👑 RPA引擎（sendInputEvent + 平台适配器）
-├── native-interactions.js           # 👑 原生交互引擎30+方法
-├── browser-manager.js               # 互动/同步（Playwright chromium.launch）
-├── data-engine.js / database.js     # 数据引擎 + SQLite
-├── vision-agent.js                  # SoM视觉Agent
-└── platforms/                       # 平台脚本
-
+├── index.js                     # 主进程 + IPC + WebRTC全局 + DevTools禁用
+├── account-browser-manager.js   # 会话容器 (BrowserView + CDP)
+├── rpa-engine.js                # RPA入口 (217行)
+├── rpa/                         # 6平台发布适配器
+├── sync/                        # 6平台数据采集器
+├── data-engine.js / database.js # SQLite
+└── platforms/                   # 6平台互动脚本
 src/renderer/src/
-├── App.jsx                          # 👑 全局状态宿主 + PublishTask跨视图状态
-├── config/matrixConfig.js           # 统一配置中心
+├── App.jsx                      # 主组件 + Toast + 绑定弹窗
 ├── components/
-│   ├── AccountManagerView.jsx       # 多标签浏览器 + 地址栏
-│   ├── PublishTask.jsx              # 3步发布 + 12平台编辑器
-│   └── AiHub/                       # 9面板AI工具集 + AiTaskContext
-└── services/llmRouteService.js
+│   ├── ToastContext.jsx          # 白底轻量 Toast (success/error/warning/info)
+│   ├── PublishTask.jsx           # 发布台 (alert→toast已替换)
+│   └── AiHub/
+│       ├── AiTaskContext.jsx     # AI调度 + 绑定守卫
+│       └── AiHubView.jsx         # 12引擎面板
 ```
 
 ### 三引擎
 
-| 引擎 | 驱动 | 用途 | 指纹防护 |
-|------|------|------|----------|
-| **RPA 发布** | Electron sendInputEvent | 视频发布（6平台）| ❌ 几乎裸奔 |
-| **账户登录** | BrowserView + CDP | 扫码/密码登录 | ⚠️ 中等 |
-| **互动+同步** | Playwright chromium.launch | 评论/数据同步 | ✅ 最完整 |
+| 引擎 | 驱动 | 用途 |
+|------|------|------|
+| RPA 发布 | Electron sendInputEvent | 视频发布 |
+| 账户登录 | BrowserView + CDP | 扫码/密码登录 |
+| 互动+同步 | Playwright chromium.launch | 评论/数据 |
+
+### WebRTC 三层
+
+| 层 | 位置 | 机制 |
+|:---:|------|------|
+| L1 | `index.js` | `app.commandLine.appendSwitch` default_public_interface_only |
+| L2 | session | `setWebRTCIPHandlingPolicy` + CDP Network.setBlockedURLs |
+| L3 | JS注入 | RTCShield 全API掩码 |
 
 ---
 
-## 2. 多标签浏览器机制（精简）
+## 2. 开发铁律
 
-- **生命周期**：点击账户→已有标签则 switchToTab，无标签则 launchEmbeddedAccountBrowser→新增 browserTabs→attach
-- **跨视图存活**：切换页面仅 detach（移到屏幕外），不销毁。browserTabs/activeTabId 在 App.jsx 层
-- **BrowserView 层级**：原生 OS 视图悬浮 DOM 之上，弹窗打开自动 detach，关闭后恢复
-- **关键 IPC**：open-account-session / close-account-session / attach-account-browser / detach-account-browser / navigate-account-browser / account-browser-url-changed / get-active-sessions
+### 会话容器
+1. Map 键: `String(accountId)`
+2. BrowserView 初始 offscreen: `(-10000, -10000, 1280, 800)` ← 必须给宽高防0x0加载
+3. **禁止** `Emulation.setDeviceMetricsOverride`（白屏/错位）
+4. 注入脚本: 禁止 Plugin.prototype / AudioContext typeof 守卫 / IIFE 包 try/catch
+5. SSL 三层: `--ignore-certificate-errors` + 分区清理 + did-fail-load 重试
+6. 关闭顺序: stop() → close() → debugger.detach() → removeBrowserView()
+7. webContents 必须 `isDestroyed()` 守卫 + try-catch
+8. 多标签只 detach 不 close；跨视图仅 detach
+9. **attach 时设 zoomFactor** → `Math.min(1, containerWidth / 1280)` 自适应容器宽度
+10. **ResizeObserver** 监听容器变化实时更新 bounds（侧边栏折叠/展开）
 
----
+### RPA
+11. 唯一交互入口: `native-interactions.js`
+12. 适配器签名: `constructor(interactions, task, webContents)`
 
-## 3. 开发铁律（精简，完整18条）
-
-### 账户沙盒
-1. Map 键统一：`String(accountId)`
-2. getActiveSessions() 返回 `[{ accountId, currentUrl }]`
-3. BrowserView 初始 offscreen：bounds `(-10000, -10000, ...)`
-4. **禁止 Emulation.setDeviceMetricsOverride**（白屏/错位）
-5. 反指纹脚本安全：禁止 Plugin.prototype、AudioContext typeof 守卫、IIFE 包 try/catch
-6. SSL 三层：commandLine ignore-certificate-errors + 分区清理 + did-fail-load 自动重试
-7. 关闭销毁顺序：stop() → close() → debugger.detach() → removeBrowserView()
-8. 多标签只 detach 不 close；跨视图仅 detach 不销毁
-9. sessionData TDZ：`loadURL('about:blank')` 之前声明 `let sessionData = null`
-10. webContents 必须 `isDestroyed()` 守卫 + try-catch
-11. 事件回调必须 try/catch
-
-### RPA 引擎
-12. 唯一交互入口：`native-interactions.js`
-13. 适配器签名：`constructor(interactions, task, webContents)`
-
-### 通用
-14. Preload 必须暴露 `send`（缺失→IPC 静默失败）
-15. lucide-react 图标先 import 再用（否则白屏）
-16. **状态提升原则**：跨视图存活→App.jsx，组件内状态随卸载丢失
-17. dev 命令：`npm run dev`
-18. Edit 工具弯引号陷阱→构建失败
+### UI / 安全
+13. Preload 必须暴露 `send`
+14. 状态提升: 跨视图存活 → App.jsx
+15. `devTools: false` — 生产禁 DevTools
+16. AI 任务入口守卫: `AiTaskContext.dispatchTask` 未绑定直接 return
 
 ---
 
-## 4. 指纹抗风能力（截至 2026-05-28）
+## 3. 命名规范
 
-### 已覆盖
-- **navigator 属性**：webdriver/plugins/platform/vendor/hardwareConcurrency/deviceMemory/screen 等17+项 → `account-browser-manager.js:128-172`
-- **Canvas**：`HTMLCanvasElement.toDataURL` 随机5像素噪声 (每刷新变) → `:187-201`
-- **WebGL**：**42参数** 完整欺骗 (WebGL 1.0 + 2.0) + **扩展全放行** (白名单太激进会破页) → `:206-312`
-- **AudioContext**：createOscillator 确定性频率噪声 (Mulberry32, 基于 accountId 种子) + webkitAudioContext 兼容 → `:314-334`
-- **WebRTC**：**RTCShield 隐形盾** — 真实实例 + 方法覆盖 (createOffer返回空SDP/setLocalDescription no-op), `instanceof RTCPeerConnection` 返回 true, 原型链完整不可检测 → `:336-392`
-  - 旧方案教训：原型 setLocalDescription no-op 无效 (ICE仍启动), RTCIceCandidate.candidate 只读 (赋值静默失败), 纯mock返回 `{}` 可被 instanceof 检测
-- **会话隔离**：分区存储 + AES-256-CBC加密Cookie，账户间零交叉污染
-- **SSL**：三层防御（全局flag + 事件preventDefault + 自动重试）
-- **备份注入**：`did-finish-load` 事件兜底 executeJavaScript，确保 CDP 失效时页面重载仍可注入
-
-### 已知缺口（按严重程度）
-1. **RPA引擎几乎裸奔**：仅删webdriver+改languages → `rpa-engine.js:102-113`
-2. **字体枚举零覆盖**
-3. **contextIsolation: false + sandbox: false** → XSS即可拿Node.js权限
-
-### CDP 注入铁律 + 教训集
-- **禁止 `worldName`**：该参数导致 `Page.addScriptToEvaluateOnNewDocument` 静默失效
-- **Page.enable 先行**：`sendCommand('Page.addScriptToEvaluateOnNewDocument')` 前必须先 `sendCommand('Page.enable')`
-- **模板字面量正则陷阱**：反引号字符串内 `\d` / `\S` / `\.` 会被 JS 引擎吞掉反斜杠，必须双写 `\\d` / `\\S` / `\\.`
-- **toDataURL 在 HTMLCanvasElement 上**：不是 CanvasRenderingContext2D，挂错对象→静默失效
-- **RTCIceCandidate.candidate 只读**：Chromium 中该属性为 getter-only，赋值操作静默失败。SDP 擦写和 addEventListener 拦截均无效，唯一可靠方案是从源头禁用 ICE（RTCShield 实例方法覆盖）
-- **WebGL 扩展白名单不宜过滤**：`getSupportedExtensions` 过滤得太激进会直接导致页面 WebGL 检测失败→一片空白。改为全放行，只伪装 `getParameter` 返回的42个参数
-- **诊断必备**：`wc.on('console-message')` 转发 BrowserView 日志到主进程
+| 禁止 (旧) | 使用 (新) |
+|-----------|----------|
+| 装甲/装甲中心 | Matrix Shield |
+| 反指纹装甲 | 会话环境配置 |
+| `buildAntiFingerprintScript` | `buildSessionEnvironmentScript` |
+| `ghostMove` | `humanMouseMove` |
+| 沙盒 | 会话容器 |
+| 洗白 | 会话初始化 |
+| 窃听 | 数据采集 |
+| 僵尸进程 | 遗留进程 |
+| 黑卡 CK / 夺舍 | Cookie 导入 |
 
 ---
 
-## 5. 当前进度
+## 4. 会话环境注入 (19域)
 
-### 已完成
-- 3步发布 + 12平台编辑器 + RPA引擎零Playwright
-- AI Hub 9面板 + 统一配置中心 + AiTaskContext全局调度
-- 账户沙盒：BrowserView + CDP反指纹
-- 多标签浏览器 + 地址栏 + 跨视图存活
-- 侧边栏方案F + 弹窗防遮挡 + SSL自动恢复
-- **PublishTask 跨视图状态保持**：currentStep/activeEditorTab/workbenchVideos/isDryRun → App.jsx
-- **AI Hub 跨视图状态保持**：7面板 localStorage 持久化
-- **反指纹装甲 v2 (2026-05-28 第二轮验证)**：
-  - ✅ WebRTC RTCShield 隐形盾 (真实实例+方法覆盖, 原型链完整, browserleaks ✔No Leak)
-  - ✅ Canvas 噪声修复 (toDataURL 挂 HTMLCanvasElement 而非 CanvasRenderingContext2D, 每次刷新 Signature 变化)
-  - ✅ WebGL 42参数伪装 (扩展全放行不破页, 硬编码默认值兜底缺失指纹数据)
-  - ✅ AudioContext Mulberry32 确定性噪声
-  - ✅ TLS 指纹正常 (标准 Chrome, 不唯一)
+navigator(17) / Screen(6) / Canvas toDataURL / WebGL(42参数) / WebGL Image Hash / AudioContext / WebRTC IP / 字体枚举 / MediaDevices / Permissions / chrome.runtime / toString防检测 / 指纹漂移 / contextIsolation / 会话隔离 / SSL / 备份注入
 
-### 下一轮
-- **字体枚举覆盖**：注入伪装字体列表
-- **RPA引擎指纹增强**：screen/canvas最低限度伪装
-- **contextIsolation 加固**：评估开启后的兼容性影响
+已知缺口: 主窗口 sandbox:false, Permissions PermissionStatus, Canvas toBlob, Screen 物理分辨率
+
+---
+
+## 5. CDP 注入教训
+
+| # | 教训 | 严重度 |
+|---|------|:---:|
+| 1 | 禁止 `worldName` → addScriptToEvaluateOnNewDocument 静默失效 | 🔴 |
+| 2 | `Page.enable` 先行于 addScript | 🔴 |
+| 3 | 模板字面量内 `\d`/`\S` 必须双写 `\\d`/`\\S` | 🟡 |
+| 4 | 禁止 `Object.defineProperties` 批量 → 逐属性独立 try/catch | 🔴 |
+| 5 | `toString.toString()` 套娃 → `makeNative` 包裹自身 | 🔴 |
+| 6 | 影子属性截不住 C++ 事件 → 原生 setter 先遣 | 🔴 |
+| 7 | `appendSwitch` 不校验 flag → 拼写错误静默失效 | 🔴 |
+| 8 | CDP `Emulation.setWebRtcIPHandlingPolicy` 不存在 | 🟡 |
+
+---
+
+## 6. 交付历史
+
+| 轮次 | 交付 |
+|:---:|------|
+| v2~v6.2 | WebRTC 三层 / Canvas 噪声 / WebGL 42参数 / AudioContext / 字体枚举 / 仿生学交互 / CDP 持久化自检 |
+| P1 | 合规清洗 — 15严重词+22高危词清零, 4函数重命名 |
+| P2 | 术语规范 — 11组清洗 |
+| P3 | 架构清理 — rpa-engine(1007→217行) + data-sync(720→26行) |
+| P4 | 跳过 — 单机桌面工具无需多用户 |
+| **P5** | **✅ 已交付** — Toast通知系统 + 包改名 yumatrix-studio v2.0 + 文档 + BrowserView自适应 + 手机绑定防白嫖 + DevTools禁用 |

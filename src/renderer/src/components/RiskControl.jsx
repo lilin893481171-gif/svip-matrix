@@ -31,7 +31,7 @@ export default function RiskControl() {
           accounts: [
             { alias: '品牌宣发号01', platform: 'B站', lastAction: '实时监控中', level: 'low', reason: '环境指纹稳定', status: '正常运行' },
             { alias: '测试跑量02', platform: '抖音', lastAction: '挂机中', level: 'high', reason: 'IP波动频繁', status: '已熔断' },
-            { alias: '引流矩阵-A', platform: '视频号', lastAction: '发文中', level: 'medium', reason: '触发验证码', status: '降权观察' }
+            { alias: '营销矩阵-A', platform: '视频号', lastAction: '发文中', level: 'medium', reason: '触发验证码', status: '降权观察' }
           ]
         });
       }
@@ -101,7 +101,7 @@ export default function RiskControl() {
         
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center justify-between hover:shadow-md transition-shadow">
           <div>
-            <h3 className="text-slate-500 text-sm font-medium mb-1">活跃沙盒节点</h3>
+            <h3 className="text-slate-500 text-sm font-medium mb-1">活跃会话节点</h3>
             <div className="text-3xl font-black text-slate-800">{riskData.activeNodes} <span className="text-sm font-normal text-slate-400">个</span></div>
           </div>
           <div className="p-4 bg-emerald-50 rounded-2xl"><Activity size={28} className="text-emerald-500" /></div>
@@ -224,7 +224,7 @@ export default function RiskControl() {
                   <td className="p-4 pr-6 text-right">
                     <div className="flex justify-end gap-2">
                       <button className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="强制熔断 (断开环境)"><PauseCircle size={18} /></button>
-                      <button className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="重置沙盒环境"><RefreshCw size={18} /></button>
+                      <button className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="重置会话环境"><RefreshCw size={18} /></button>
                     </div>
                   </td>
                 </tr>

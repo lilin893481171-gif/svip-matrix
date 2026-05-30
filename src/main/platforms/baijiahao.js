@@ -21,12 +21,12 @@ async function checkAndHandleCaptcha(page, randomSleep) {
         });
 
         if (captchaVisible) {
-            console.log(`⚠️ [风控预警] 触发百度行为风控！机甲已紧急悬停，请在沙盒中【手动完成滑块】！倒计时 60 秒...`);
+            console.log(`⚠️ [风控预警] 触发百度行为风控！执行已暂停，请在会话容器中【手动完成滑块】！倒计时 60 秒...`);
             await page.waitForFunction(() => {
                 const text = document.body.innerText || '';
                 return !(text.includes('百度安全验证') && text.includes('请完成下方验证后继续操作'));
             }, { timeout: 60000 });
-            console.log(`✅ [风控解除] 滑块验证通过，机甲恢复执行！`);
+            console.log(`✅ [风控解除] 滑块验证通过，页面恢复执行！`);
             await randomSleep(page, 2000, 3000);
         }
     } catch (e) {}
@@ -225,7 +225,7 @@ export async function runBatchPin(page, targetVideos, replyText, randomSleep) {
     await applyBaiduStealth(page); 
 
     for (const video of targetVideos) {
-        console.log(`🎬 [首发引擎] 正在空降百家号作品播放页: [${video.title}]`);
+        console.log(`🎬 [首发引擎] 正在导航至百家号作品播放页: [${video.title}]`);
         try {
             if (!video.url) continue;
 
@@ -262,7 +262,7 @@ export async function runBatchPin(page, targetVideos, replyText, randomSleep) {
                 if (await sendBtn.isVisible()) {
                     await sendBtn.click({ delay: Math.floor(Math.random() * 100) + 50 });
                     successCount++;
-                    console.log(`🔥 [首发引擎] 百家号首评发射成功！(拟人化击发)`);
+                    console.log(`🔥 [首发引擎] 百家号首评发送成功！`);
                     await randomSleep(page, 2000, 3000);
                 } else {
                     await page.keyboard.press('Enter', { delay: 100 });
@@ -278,7 +278,7 @@ export async function runBatchPin(page, targetVideos, replyText, randomSleep) {
  * 4. 百家号：精准回复模块 (搭载拟人化键盘与鼠标轨迹)
  */
 export async function runReply(page, msg, replyText, randomSleep) {
-    console.log(`🚀 [降临引擎] 正在空降百家号评论管理页...`);
+    console.log(`🚀 [执行引擎] 正在导航至百家号评论管理页...`);
     await applyBaiduStealth(page); 
 
     await navigateToBaijiahaoComments(page, randomSleep);
@@ -337,7 +337,7 @@ export async function runReply(page, msg, replyText, randomSleep) {
                 const sendBtn = page.locator('button:visible, span:visible, div[role="button"]:visible').filter({ hasText: /^回\s*复$|^发\s*送$/ }).last();
                 if (await sendBtn.isVisible()) {
                     await sendBtn.click({ delay: Math.floor(Math.random() * 100) + 50 });
-                    console.log(`🔥 [降临引擎] 百家号右侧面板回复击发成功！`);
+                    console.log(`🔥 [执行引擎] 百家号右侧面板回复发送成功！`);
                 } else {
                     await page.keyboard.press('Enter', { delay: 100 });
                 }

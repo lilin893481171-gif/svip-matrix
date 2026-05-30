@@ -101,7 +101,7 @@ export async function runVideoRadar(page, acc, randomSleep) {
         }
     });
 
-    console.log(`🎬 正在空降视频号 创作者管理大厅...`);
+    console.log(`🎬 正在导航至视频号 创作者管理大厅...`);
     await page.goto('https://channels.weixin.qq.com/platform/post/list', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await randomSleep(page, 3000, 5000); 
     await page.mouse.wheel(0, 400);
@@ -119,7 +119,7 @@ export async function runVideoRadar(page, acc, randomSleep) {
  * =========================================================
  */
 async function navigateToCommentPageViaSidebar(page, randomSleep) {
-    console.log(`🎬 正在空降视频号 宿主大厅(Platform)...`);
+    console.log(`🎬 正在导航至视频号 宿主大厅(Platform)...`);
     // 1. 强制降落在宿主根目录，避免 Cannot GET 报错
     await page.goto('https://channels.weixin.qq.com/platform', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await randomSleep(page, 3000, 5000);
@@ -250,7 +250,7 @@ export async function runCommentRadar(page, db, acc, randomSleep) {
 
 /**
  * =========================================================
- * 3. 微信视频号：批量首发置顶模块 (拟人化击发)
+ * 3. 微信视频号：批量首发置顶模块
  * =========================================================
  */
 export async function runBatchPin(page, targetVideos, replyText, randomSleep) {
@@ -258,7 +258,7 @@ export async function runBatchPin(page, targetVideos, replyText, randomSleep) {
     await applyWeixinStealth(page); 
 
     for (const video of targetVideos) {
-        console.log(`🎬 [首发引擎] 正在空降视频详情页: [${video.title}]`);
+        console.log(`🎬 [首发引擎] 正在导航至视频详情页: [${video.title}]`);
         try {
             if (!video.url) continue;
 
@@ -302,7 +302,7 @@ export async function runBatchPin(page, targetVideos, replyText, randomSleep) {
  * =========================================================
  */
 export async function runReply(page, msg, replyText, randomSleep) {
-    console.log(`🚀 [降临引擎] 正在前往视频号 互动评论中心...`);
+    console.log(`🚀 [执行引擎] 正在前往视频号 互动评论中心...`);
     await applyWeixinStealth(page); 
 
     // 🌟 核心修复：调用物理寻路进入评论页
@@ -347,7 +347,7 @@ export async function runReply(page, msg, replyText, randomSleep) {
                     const sendBtn = page.locator('div.tag-wrap.primary').filter({ hasText: '评论' }).last();
                     if (await sendBtn.isVisible()) {
                         await sendBtn.click({ force: true, delay: 50 });
-                        console.log(`🔥 [降临引擎] 视频号精准回复击发成功！`);
+                        console.log(`🔥 [执行引擎] 视频号精准回复发送成功！`);
                     } else {
                         await page.keyboard.press('Enter');
                     }

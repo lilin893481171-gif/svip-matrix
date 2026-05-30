@@ -1,13 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Sparkles, X, Bot, Edit, Wand2, Send, Cpu, MessageSquare, Rocket } from 'lucide-react';
-
-// 🚀 文案风格预设词库
-const COPY_STYLES = [
-  { id: 'net', label: '🔥 爆款网感', prompt: '文案要有极强的“网感”，善用热门梗，前3秒必须抓人眼球，制造悬念或情绪共鸣，适合泛流量抓取。' },
-  { id: 'hardcore', label: '⚙️ 硬核解压', prompt: '文案聚焦在产品的机械结构、材质（如纯钛/合金）、声音反馈（如段落感/清脆声），多用拟声词和触觉描写，精准击中ASMR和EDC玩家痛点。' },
-  { id: 'premium', label: '💎 高端测评', prompt: '文案克制、高级、专业。多用行业术语、参数对比，凸显做工精良和设计美学，像苹果发布会一样的高级感，适合高客单价转化。' },
-  { id: 'emotion', label: '❤️ 情感共鸣', prompt: '文案走心，像老朋友聊天。结合深夜失眠、打工焦虑、通勤无聊等生活场景，将产品包装成情绪的出口和精神寄托。' },
-];
+import { cfApiUrl, authHeaders, COPY_STYLES } from '../config/matrixConfig';
 
 export default function DeepSeekCopilot({ isOpen, onClose, activeVideo, updateConfig }) {
   const [chatMode, setChatMode] = useState('matrix'); 
@@ -101,9 +94,7 @@ export default function DeepSeekCopilot({ isOpen, onClose, activeVideo, updateCo
 
   // 🌟 核心：直连咱们自己的 Cloudflare 商业网关
   const callLLM = async (userText) => {
-    const GATEWAY_URL = 'https://myapp.nikolaboy.com';
-    const MOCK_TOKEN = 'matrix-test-token-123';
-    const MODEL_NAME = 'deepseek-chat'; // 对应 DeepSeek 官方模型名
+    const MODEL_NAME = 'deepseek-chat';
 
     const SYSTEM_PROMPT_MATRIX = `
 你是一个顶级的全网自媒体矩阵爆款策划专家，擅长根据各平台算法逻辑定制文案。
@@ -166,12 +157,9 @@ export default function DeepSeekCopilot({ isOpen, onClose, activeVideo, updateCo
       requestBody.response_format = { type: 'json_object' };
     }
 
-    const response = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
+    const response = await fetch(cfApiUrl('/v1/chat/completions'), {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Matrix-Token': MOCK_TOKEN
-      },
+      headers: authHeaders(),
       body: JSON.stringify(requestBody)
     });
 

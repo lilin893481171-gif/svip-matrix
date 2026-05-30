@@ -3,19 +3,13 @@
  * 经由 Cloudflare 代理网关 (DeepSeek) 进行安全请求
  */
 
-// 🌐 换成你部署好的 CF Worker 的真实外网域名
-const CF_DOMAIN = 'https://myapp.nikolaboy.com'; 
+import { cfApiUrl, authHeaders } from '../config/matrixConfig';
 
 export const parseUserIntent = async (inputText) => {
   try {
-    // 1. 向你的 CF 网关发送请求 (走 /v1/chat/completions 路由)
-    const response = await fetch(`${CF_DOMAIN}/v1/chat/completions`, {
+    const response = await fetch(cfApiUrl('/v1/chat/completions'), {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        // 🔑 必须带上这个 Token！你的 CF Worker 第 15 行正在检查它！
-        'X-Matrix-Token': 'matrix-test-token-123' 
-      },
+      headers: authHeaders(),
       body: JSON.stringify({
         model: "deepseek-chat", // 强制调用 DeepSeek
         messages: [

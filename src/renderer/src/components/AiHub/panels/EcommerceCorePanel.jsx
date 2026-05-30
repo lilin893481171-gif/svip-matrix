@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   UploadCloud,
   Image as ImageIcon,
@@ -13,6 +13,7 @@ import {
   Palette,
   Users,
 } from 'lucide-react';
+import { useAiTasks } from '../AiTaskContext';
 
 const SCENE_STYLES = [
   { value: 'nordic', label: '极简北欧' },
@@ -37,18 +38,33 @@ const RENDER_STAGES = [
   '4K 超分辨率增强中...',
 ];
 
-export default function EcommerceCorePanel() {
+function usePersistentState(key, defaultValue) {
+  const [value, setValue] = useState(() => {
+    try { return window.localStorage.getItem(key) !== null ? JSON.parse(window.localStorage.getItem(key)) : defaultValue; }
+    catch (e) { return defaultValue; }
+  });
+  useEffect(() => { window.localStorage.setItem(key, JSON.stringify(value)); }, [key, value]);
+  return [value, setValue];
+}
+
+export default function EcommerceCorePanel({ workspaceMeta }) {
+  const { guardDispatch } = useAiTasks();
+  const coreId = workspaceMeta?.coreId || 'ecommerce_core';
   const [uploadedImage, setUploadedImage] = useState(null);
   const [uploadedImageName, setUploadedImageName] = useState('');
-  const [taskMode, setTaskMode] = useState('scene');
-  const [sceneStyle, setSceneStyle] = useState('nordic');
-  const [modelFeature, setModelFeature] = useState('asian');
+  const [taskMode, setTaskMode] = usePersistentState(`ecom_mode_${coreId}`, 'scene');
+  const [sceneStyle, setSceneStyle] = usePersistentState(`ecom_scene_${coreId}`, 'nordic');
+  const [modelFeature, setModelFeature] = usePersistentState(`ecom_model_${coreId}`, 'asian');
   const [isRendering, setIsRendering] = useState(false);
   const [renderProgress, setRenderProgress] = useState(0);
-  const [renderComplete, setRenderComplete] = useState(false);
-  const [generatedImageUrl, setGeneratedImageUrl] = useState(null);
+  const [renderComplete, setRenderComplete] = usePersistentState(`ecom_complete_${coreId}`, false);
+  const [generatedImageUrl, setGeneratedImageUrl] = usePersistentState(`ecom_result_${coreId}`, null);
   const [stageIndex, setStageIndex] = useState(0);
   const fileInputRef = useRef(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const resetCanvas = () => {
     setRenderComplete(false);
@@ -87,6 +103,7 @@ export default function EcommerceCorePanel() {
       alert('请先上传产品 SKU / 样衣图片');
       return;
     }
+    if (!guardDispatch()) return;
     resetCanvas();
     setIsRendering(true);
     setRenderProgress(0);
@@ -110,9 +127,11 @@ export default function EcommerceCorePanel() {
 
       if (tick >= totalTicks) {
         clearInterval(interval);
+        if (!mountedRef.current) return;
         setRenderProgress(100);
         setGeneratedImageUrl('https://picsum.photos/800/600');
         setTimeout(() => {
+          if (!mountedRef.current) return;
           setIsRendering(false);
           setRenderComplete(true);
         }, 600);
@@ -264,7 +283,7 @@ export default function EcommerceCorePanel() {
                       setSceneStyle(e.target.value);
                       resetCanvas();
                     }}
-                    className="w-full text-xs p-2.5 border border-zinc-200 rounded-sm outline-none focus:border-amber-400 bg-white font-medium"
+                    className="w-full text-xs p-2.5 border border-zinc-200 rounded-sm outline-none focus:border-amber-400 bg-white font-medium disabled:bg-zinc-100 disabled:text-zinc-400"
                   >
                     {SCENE_STYLES.map((s) => (
                       <option key={s.value} value={s.value}>
@@ -285,7 +304,7 @@ export default function EcommerceCorePanel() {
                       setModelFeature(e.target.value);
                       resetCanvas();
                     }}
-                    className="w-full text-xs p-2.5 border border-zinc-200 rounded-sm outline-none focus:border-violet-400 bg-white font-medium"
+                    className="w-full text-xs p-2.5 border border-zinc-200 rounded-sm outline-none focus:border-violet-400 bg-white font-medium disabled:bg-zinc-100 disabled:text-zinc-400"
                   >
                     {MODEL_FEATURES.map((f) => (
                       <option key={f.value} value={f.value}>
@@ -310,7 +329,6 @@ export default function EcommerceCorePanel() {
             {/* 渲染按钮 */}
             <button
               onClick={startRender}
-              disabled={isRendering || !uploadedImage}
               className="mt-6 w-full py-3.5 bg-black text-white text-sm font-black flex items-center justify-center gap-2 hover:bg-zinc-800 disabled:bg-zinc-300 disabled:cursor-not-allowed transition-all shadow-lg rounded-sm uppercase tracking-wider"
             >
               {isRendering ? (
@@ -480,6 +498,7 @@ export default function EcommerceCorePanel() {
                 </div>
               </div>
             )}
+
           </div>
         </div>
       </div>

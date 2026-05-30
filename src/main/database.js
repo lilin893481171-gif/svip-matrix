@@ -272,11 +272,11 @@ export function registerDatabaseIPC() {
       });
       transaction();
 
-      // 删除playwright对应的缓存文件夹，做到真正“毁尸灭迹”
+      // 删除对应的浏览器缓存文件夹，彻底清理残留数据
       const profilePath = path.join(app.getPath('userData'), 'playwright_profiles', `chrome_data_${id}`);
       if (fs.existsSync(profilePath)) {
         fs.rmSync(profilePath, { recursive: true, force: true });
-        console.log(`✅ 已连带删除账号${id}的浏览器沙盒缓存！`);
+        console.log(`✅ 已彻底清理账号 ${id} 的浏览器会话缓存`);
       }
 
       return { success: true };

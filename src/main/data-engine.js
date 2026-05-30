@@ -1,9 +1,10 @@
 /**
  * @file data-engine.js
- * @description 全域数据罗盘引擎 (干净、高内聚，完全信任底层指纹沙盒与动态代理)
+ * @description 全域数据罗盘引擎 (干净、高内聚，完全信任底层会话管理与动态代理)
  */
 
-import { launchSandbox, closeSandbox, importCookieAndWash, isSandboxActive } from './browser-manager.js';
+import { launchSandbox, closeSandbox, importCookieAndInitialize, isSandboxActive } from './browser-manager.js';
+import { launchEmbeddedAccountBrowser, detachAccountBrowser, closeEmbeddedAccountBrowser, getActiveSessions as getActiveNativeSessions } from './account-browser-manager.js';
 import { ipcMain, app } from 'electron';
 import path from 'path';
 import fs from 'fs';
@@ -219,18 +220,18 @@ export async function autoBindAccount(platform, proxyStr = '') {
   let bEndData = null;
 
   try {
-    console.log(`[探针系统] 正在为 ${platform} 分配独立沙盒${proxyStr ? ' [使用代理]' : ''}...`);
+    console.log(`[探针系统] 正在为 ${platform} 分配独立会话容器${proxyStr ? ' [使用代理]' : ''}...`);
     browserSession = await launchSandbox(accountId, { headless: false, proxy: proxyStr }); 
     const { page, context } = browserSession;
 
-    // 全局窃听器：拦截所有标签页的请求
+    // 网络响应拦截：监听标签页 API 请求
     context.on('response', async (response) => {
         if (response.request().resourceType() === 'fetch' || response.request().resourceType() === 'xhr') {
             try {
                 const url = response.url();
 
                 if (platform === '小红书') {
-                    // 1. 窃听 B 端数据 (新弹出的网页里产生)
+                    // 1. 采集 B 端数据 (新弹出的网页里产生)
                     if (url.includes('/api/creator/user/info')) {
                         const text = await response.text();
                         const json = JSON.parse(text);
@@ -240,10 +241,10 @@ export async function autoBindAccount(platform, proxyStr = '') {
                             bEndData.avatar = json.data.image || '';
                             bEndData.userId = json.data.red_id || '';
                             bEndData.followers = json.data.fans || json.data.fans_count || 0;
-                            console.log(`[探针系统] 🎯 B端数据窃听成功: ID[${bEndData.userId}] 粉丝[${bEndData.followers}]`);
+                            console.log(`[探针系统] 🎯 B端数据采集成功: ID[${bEndData.userId}] 粉丝[${bEndData.followers}]`);
                         }
-                    } 
-                    // 2. 窃听 C 端数据 (点击“我”之后产生)
+                    }
+                    // 2. 采集 C 端数据 (点击”我”之后产生)
                     else if (url.includes('/api/sns/web/v1/user/selfinfo')) {
                         const text = await response.text();
                         const json = JSON.parse(text);
@@ -253,14 +254,14 @@ export async function autoBindAccount(platform, proxyStr = '') {
                             cEndData.realName = basic.nickname || '';
                             cEndData.avatar = basic.images || basic.imageb || '';
                             cEndData.userId = basic.red_id || '';
-                            
+
                             if (json.data.interactions && Array.isArray(json.data.interactions)) {
                                 const fansObj = json.data.interactions.find(item => item.type === 'fans');
                                 if (fansObj) cEndData.followers = parseInt(fansObj.count) || 0;
                                 const likesObj = json.data.interactions.find(item => item.type === 'interaction');
                                 if (likesObj) cEndData.views = parseInt(likesObj.count) || 0;
                             }
-                            console.log(`[探针系统] 🎯 C端数据窃听成功: ID[${cEndData.userId}] 粉丝[${cEndData.followers}]`);
+                            console.log(`[探针系统] 🎯 C端数据采集成功: ID[${cEndData.userId}] 粉丝[${cEndData.followers}]`);
                         }
                     }
                 }
@@ -271,7 +272,7 @@ export async function autoBindAccount(platform, proxyStr = '') {
     const targetUrl = PLATFORM_URLS[platform] || 'https://www.baidu.com';
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    console.log(`[探针系统] ${platform} 登录页已就绪，等待指挥官扫码...`);
+    console.log(`[探针系统] ${platform} 登录页已就绪，等待用户扫码...`);
     
     let isLogged = false;
     for (let i = 0; i < 60; i++) { 
@@ -289,7 +290,7 @@ export async function autoBindAccount(platform, proxyStr = '') {
             });
             
             if (!isLoginPage) {
-                console.log(`[探针系统] ✅ 检测到扫码成功！进入数据窃取阶段...`);
+                console.log(`[探针系统] ✅ 检测到扫码成功！进入数据采集阶段...`);
                 isLogged = true;
                 break;
             }
@@ -347,7 +348,7 @@ export async function autoBindAccount(platform, proxyStr = '') {
         const pageHtml = await page.content();
         const domData = parseOfflineSnapshot(pageHtml, platform);
 
-        // 🌟 B端数据比对入库：如果 C 端窃听失败或不一致，强制使用 B 端
+        // B端数据比对入库：如果 C 端数据采集失败或不一致，强制使用 B 端
         let targetData = cEndData || {};
         
         if (bEndData && Object.keys(bEndData).length > 0) {
@@ -402,7 +403,7 @@ export async function autoBindAccount(platform, proxyStr = '') {
 }
 
 // ==========================================================
-// 3. 大盘单号双擎抽水机 
+// 3. 大盘单号数据采集器
 // ==========================================================
 async function runSingleSync(accountId, platform) {
   let browserSession = null;
@@ -443,7 +444,7 @@ async function runSingleSync(accountId, platform) {
 }
 
 // ==========================================================
-// 👻 幽灵巡检引擎：原生主页重定向探测
+// 会话状态巡检：原生主页重定向探测
 // ==========================================================
 export async function checkAccountStatus(accountId, platform) {
     if (isSandboxActive(accountId)) {
@@ -510,7 +511,7 @@ export async function checkAccountStatus(accountId, platform) {
 }
 
 // ==========================================================
-// 4. 司令部全局 IPC 总线注册 
+// 4. 全局 IPC 总线注册
 // ==========================================================
 
 let isIpcRegistered = false;
@@ -527,8 +528,20 @@ export function registerDataEngineIPC() {
           const db = getDB();
           const acc = db.prepare('SELECT * FROM accounts WHERE id = ?').get(accountId);
 
-          const session = await launchSandbox(accountId, { headless: false, proxy: acc?.proxy });
-          const { page } = session;
+          // 多标签共存：不再关闭其他会话容器，只 detach（移到屏幕外）
+          for (const session of getActiveNativeSessions()) {
+            if (session.accountId !== String(accountId)) {
+              detachAccountBrowser(session.accountId);
+            }
+          }
+
+          const result = await launchEmbeddedAccountBrowser(accountId, {
+            headless: false,
+            proxy: acc?.proxy
+          });
+          if (!result.success) throw new Error(result.message || '原生会话容器启动失败');
+
+          const { webContents } = result;
 
           let targetUrl = PLATFORM_URLS[platform] || 'https://www.baidu.com';
           if (platform === '小红书') {
@@ -536,24 +549,43 @@ export function registerDataEngineIPC() {
           }
           if (customUrl) targetUrl = customUrl;
 
-          await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+          // 加载前再清除一次 SSL 缓存，防止协议握手失败导致白屏
+          try {
+            await webContents.session.clearHostResolverCache();
+            await webContents.session.clearCache();
+          } catch (e) {}
+
+          await webContents.loadURL(targetUrl);
+
           return { success: true };
       } catch (error) {
           return { success: false, message: error.message };
       }
   });
 
+  // 关闭原生账户浏览器
+  ipcMain.removeHandler('close-account-session');
+  ipcMain.handle('close-account-session', async (event, { accountId }) => {
+    try {
+      detachAccountBrowser(accountId);
+      await closeEmbeddedAccountBrowser(accountId);
+      return { success: true };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  });
+
   ipcMain.removeHandler('import-account-cookie');
   ipcMain.handle('import-account-cookie', async (event, payload) => {
       const { platform, cookieStr, proxyStr } = payload;
       const db = getDB();
-      const info = db.prepare(`INSERT INTO accounts (alias, platform, status, proxy) VALUES (?, ?, ?, ?)`).run(`导入_${platform}`, platform, '洗白中...', proxyStr || '');
+      const info = db.prepare(`INSERT INTO accounts (alias, platform, status, proxy) VALUES (?, ?, ?, ?)`).run(`导入_${platform}`, platform, '初始化中...', proxyStr || '');
       const accountId = info.lastInsertRowid;
 
       try {
-          await importCookieAndWash(accountId, cookieStr, platform, { proxy: proxyStr });
+          await importCookieAndInitialize(accountId, cookieStr, platform, { proxy: proxyStr });
           await runSingleSync(accountId, platform);
-          return { success: true, message: 'CK导入并洗白成功！' };
+          return { success: true, message: 'Cookie 导入并初始化成功！' };
       } catch (error) {
           db.prepare('DELETE FROM accounts WHERE id = ?').run(accountId);
           return { success: false, message: error.message };

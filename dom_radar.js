@@ -27,7 +27,7 @@ function getMatrixProfilePath(accountId) {
   let pkgName = 'my-app';
   try { pkgName = require(path.join(process.cwd(), 'package.json')).name; } catch (e) {}
 
-  const possibleNames = ['Electron', pkgName, 'matrix-client', 'my-app'];
+  const possibleNames = ['Electron', pkgName, 'matrix-client', 'yumatrix-studio'];
   for (const name of possibleNames) {
     const testPath = path.join(appData, name, 'playwright_profiles', `chrome_data_${accountId}`);
     if (fs.existsSync(testPath)) {

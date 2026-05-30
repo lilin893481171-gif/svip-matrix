@@ -5,14 +5,17 @@ const electronAPI = {
   ipcRenderer: {
     // 发送并等待主进程返回结果 (你前端用的最多的方法)
     invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
-    
+
+    // 单向发送消息到主进程 (不等待返回)
+    send: (channel, ...args) => ipcRenderer.send(channel, ...args),
+
     // 监听主进程发来的消息
     on: (channel, listener) => {
       const subscription = (event, ...args) => listener(...args)
       ipcRenderer.on(channel, subscription)
       return () => ipcRenderer.removeListener(channel, subscription)
     },
-    
+
     // 移除监听
     removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel)
   }

@@ -1,9 +1,10 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   UploadCloud, Image as ImageIcon, Zap, Loader2, CheckCircle2, Download,
   ArrowLeftRight, Sparkles, Palette, Shirt, Package, ImagePlus, Store,
-  Layers, Megaphone,
+  Layers,
 } from 'lucide-react';
+import { useAiTasks } from '../AiTaskContext';
 
 // ──────────────────────────────────────────────
 // 工具元数据配置表（配置驱动，不改组件逻辑）
@@ -83,32 +84,6 @@ const TOOL_META = {
     ],
     secondaryDefault: 'white_studio',
   },
-  ec_ad_fission: {
-    title: '广告素材裂变器',
-    subtitle: '1 张主图 → 多平台/多尺寸/多风格广告创意矩阵',
-    icon: Megaphone,
-    iconColor: 'text-orange-500',
-    configLabel: '投放平台',
-    configIcon: Megaphone,
-    options: [
-      { value: 'facebook', label: 'Facebook / Instagram Ads' },
-      { value: 'tiktok', label: 'TikTok Ads' },
-      { value: 'google', label: 'Google Shopping' },
-      { value: 'pinterest', label: 'Pinterest Ads' },
-      { value: 'amazon', label: 'Amazon DSP' },
-      { value: 'all_platforms', label: '全平台覆盖 (6合1)' },
-    ],
-    defaultOption: 'facebook',
-    accent: 'orange',
-    secondaryLabel: '输出套数',
-    secondaryOptions: [
-      { value: '10', label: '10 套 · 快速测试' },
-      { value: '20', label: '20 套 · A/B 优选' },
-      { value: '50', label: '50 套 · 全量覆盖' },
-      { value: '100', label: '100 套 · 火力全开' },
-    ],
-    secondaryDefault: '20',
-  },
   ec_outpainting: {
     title: '商品无损扩图',
     subtitle: '1:1 主图智能扩展为 16:9 / 21:9 横版海报，主体零损伤',
@@ -136,22 +111,32 @@ const RENDER_STAGES = [
   '最终画面合成与色彩校准...',
 ];
 
+function usePersistentState(key, defaultValue) {
+  const [value, setValue] = useState(() => {
+    try { return window.localStorage.getItem(key) !== null ? JSON.parse(window.localStorage.getItem(key)) : defaultValue; }
+    catch (e) { return defaultValue; }
+  });
+  useEffect(() => { window.localStorage.setItem(key, JSON.stringify(value)); }, [key, value]);
+  return [value, setValue];
+}
+
 // ──────────────────────────────────────────────
 // 组件本体
 // ──────────────────────────────────────────────
 export default function ImageTransformPanel({ activeWorkspace, workspaceMeta }) {
+  const { guardDispatch } = useAiTasks();
   const meta = useMemo(() => TOOL_META[activeWorkspace] || TOOL_META.ec_prod_scene, [activeWorkspace]);
   const Icon = meta.icon;
 
   const [uploadedImage, setUploadedImage] = useState(null);
   const [uploadedImageName, setUploadedImageName] = useState('');
-  const [primaryOption, setPrimaryOption] = useState(meta.defaultOption);
-  const [secondaryOption, setSecondaryOption] = useState(meta.secondaryDefault || '');
+  const [primaryOption, setPrimaryOption] = usePersistentState(`imgtx_primary_${activeWorkspace}`, meta.defaultOption);
+  const [secondaryOption, setSecondaryOption] = usePersistentState(`imgtx_secondary_${activeWorkspace}`, meta.secondaryDefault || '');
 
   const [isRendering, setIsRendering] = useState(false);
   const [renderProgress, setRenderProgress] = useState(0);
-  const [renderComplete, setRenderComplete] = useState(false);
-  const [generatedImageUrl, setGeneratedImageUrl] = useState(null);
+  const [renderComplete, setRenderComplete] = usePersistentState(`imgtx_complete_${activeWorkspace}`, false);
+  const [generatedImageUrl, setGeneratedImageUrl] = usePersistentState(`imgtx_result_${activeWorkspace}`, null);
   const [stageIndex, setStageIndex] = useState(0);
 
   const fileInputRef = useRef(null);
@@ -201,6 +186,7 @@ export default function ImageTransformPanel({ activeWorkspace, workspaceMeta }) 
       alert('请先上传商品图片');
       return;
     }
+    if (!guardDispatch()) return;
     resetCanvas();
     setIsRendering(true);
     setRenderProgress(0);

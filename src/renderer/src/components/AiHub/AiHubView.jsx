@@ -1,45 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { Layers, Cpu, Box, ArrowLeft, BrainCircuit, Sparkles, Rocket, MonitorPlay, Film, Palette } from 'lucide-react';
+import { Layers, Cpu, Box, ArrowLeft, BrainCircuit, Sparkles, Rocket } from 'lucide-react';
 
 import IntentHeroInput from './IntentHeroInput';
 import { parseUserIntent } from '../../services/llmRouteService';
 import { AI_TOOLS_REGISTRY } from '../../config/aiMatrixData';
+import { cfApiUrl, authHeaders } from '../../config/matrixConfig';
 
 
 // 🌟 引入刚刚抽离出来的车间
 import TxtCorePanel from './panels/TxtCorePanel';
 import AudCorePanel from './panels/AudCorePanel';
-import MediaCorePanel from './panels/MediaCorePanel';
+import ImageStudioPanel from './panels/ImageStudioPanel';
+import VideoStudioPanel from './panels/VideoStudioPanel';
 import ImageTransformPanel from './panels/ImageTransformPanel';
+import VideoGenPanel from './panels/VideoGenPanel';
+import BatchFissionPanel from './panels/BatchFissionPanel';
+import EngineCockpitPanel from './panels/EngineCockpitPanel';
 import EcommerceCorePanel from './panels/EcommerceCorePanel';
-const CF_DOMAIN = 'https://myapp.nikolaboy.com';
-
-// 🚀 驾驶舱占位组件（引擎即将开放）
-function CockpitPlaceholder({ title, engine, icon: Icon, themeColor }) {
-  return (
-    <div className="flex-1 bg-zinc-950 flex flex-col items-center justify-center p-12 animate-in fade-in duration-700">
-      <div className="relative mb-10">
-        <div className="w-24 h-24 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center">
-          <Icon size={40} className={themeColor} />
-        </div>
-        <div className="absolute -top-2 -right-2 bg-amber-500 text-black text-[9px] font-black px-2 py-0.5 rounded-full animate-pulse">
-          SOON
-        </div>
-      </div>
-      <h2 className="text-2xl font-black text-white tracking-tight mb-2">{title}</h2>
-      <p className="text-sm text-zinc-500 font-medium mb-3">{engine}</p>
-      <div className="w-48 h-0.5 bg-zinc-800 rounded-full mb-6">
-        <div className="h-full w-1/3 bg-gradient-to-r from-zinc-700 to-zinc-500 rounded-full animate-pulse" />
-      </div>
-      <p className="text-xs text-zinc-600 font-mono tracking-wider uppercase">引擎适配中 · Engine Calibrating</p>
-      <div className="mt-10 flex gap-1.5">
-        {[...Array(3)].map((_, i) => (
-          <div key={i} className={`w-1.5 h-1.5 rounded-full ${i === 1 ? 'bg-amber-500' : 'bg-zinc-700'}`} />
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function usePersistentState(key, defaultValue) {
   const [value, setValue] = useState(() => {
@@ -50,25 +27,40 @@ function usePersistentState(key, defaultValue) {
   return [value, setValue];
 }
 
-export default function AiHubView() {
+export default function AiHubView({ isPhoneBound, onRequestBind }) {
   const [cloudConfig, setCloudConfig] = useState(null);
   const [isBooting, setIsBooting] = useState(true);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const [activeWorkspace, setActiveWorkspace] = usePersistentState('aihub_activeWorkspace', null);
   const [workspaceMeta, setWorkspaceMeta] = usePersistentState('aihub_workspaceMeta', null);
-  const engineMatrixRef = React.useRef(null); 
+  const engineMatrixRef = React.useRef(null);
 
   useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
     const fetchCloudConfig = async () => {
       try {
-        const res = await fetch(`${CF_DOMAIN}/v1/hub-config`, { headers: { 'X-Matrix-Token': 'matrix-test-token-123' } });
-        setCloudConfig(await res.json());
+        const res = await fetch(cfApiUrl('/v1/hub-config'), {
+          headers: authHeaders(),
+          signal: controller.signal,
+        });
+        const data = await res.json();
+        if (!cancelled) setCloudConfig(data);
       } catch (err) {
-        setCloudConfig({ strategy: { txt_core: { engine: '离线模型', cost: 1 }, aud_core: { engine: '离线模型', cost: 8 }, img_core: {engine: '离线', cost: 5}, vid_core: {engine: '离线', cost: 15}, ecommerce_core: {engine: '离线', cost: 18}, content_core: {engine: '离线', cost: 10}, film_core: {engine: '离线', cost: 20}, design_core: {engine: '离线', cost: 12}, ec_image_core: {engine: '离线', cost: 5} }});
-      } finally { setTimeout(() => setIsBooting(false), 800); }
+        if (err.name === 'AbortError') return;
+        if (!cancelled) {
+          setCloudConfig({ strategy: { txt_core: { engine: '离线模型', cost: 1 }, aud_core: { engine: '离线模型', cost: 8 }, studio_image_core: {engine: '离线', cost: 5}, studio_video_core: {engine: '离线', cost: 15}, ecommerce_core: {engine: '离线', cost: 18}, content_core: {engine: '离线', cost: 10}, film_core: {engine: '离线', cost: 20}, design_core: {engine: '离线', cost: 12}, ec_image_core: {engine: '离线', cost: 5}, ec_video_core: {engine: '离线', cost: 15}, ec_batch_core: {engine: '离线', cost: 20} }});
+        }
+      } finally {
+        if (!cancelled) setTimeout(() => setIsBooting(false), 800);
+      }
     };
     fetchCloudConfig();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, []);
 
   const handleIntentLaunch = async (inputText) => {
@@ -80,7 +72,7 @@ export default function AiHubView() {
   };
 
   const launchWorkspaceDirectly = (toolId, coreId, title, desc, template) => {
-    const currentStrategy = cloudConfig.strategy[coreId] || { engine: '云端失联', cost: 0 };
+    const currentStrategy = (cloudConfig?.strategy && cloudConfig.strategy[coreId]) || { engine: '云端失联', cost: 0 };
     setWorkspaceMeta({ coreId, title, desc, engine: currentStrategy.engine, cost: currentStrategy.cost, template: template || '' });
     setActiveWorkspace(toolId);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -101,7 +93,7 @@ export default function AiHubView() {
       <header className="h-16 border-b border-zinc-200 flex items-center justify-between px-8 bg-white/80 sticky top-0 z-50">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveWorkspace(null)}>
           <Box size={22} className="text-black" strokeWidth={2.5} />
-          <span className="text-xl font-black tracking-tighter">YuMatrix</span>
+          <span className="text-xl font-black tracking-tighter">YuMatrix Studio</span>
         </div>
         <div className="flex items-center space-x-6">
           <div className="text-xs font-bold text-zinc-400 flex items-center"><Cpu size={14} className="mr-1.5" /> 算力集群节点: <span className="text-black font-black ml-1">12,450</span></div>
@@ -116,12 +108,15 @@ export default function AiHubView() {
           <>
             {workspaceMeta?.coreId === 'txt_core' && <TxtCorePanel activeWorkspace={activeWorkspace} workspaceMeta={workspaceMeta} />}
             {workspaceMeta?.coreId === 'aud_core' && <AudCorePanel activeWorkspace={activeWorkspace} workspaceMeta={workspaceMeta} />}
-            {(workspaceMeta?.coreId === 'img_core' || workspaceMeta?.coreId === 'vid_core') && <MediaCorePanel activeWorkspace={activeWorkspace} workspaceMeta={workspaceMeta} />}
-            {workspaceMeta?.coreId === 'ecommerce_core' && <EcommerceCorePanel />}
+            {workspaceMeta?.coreId === 'studio_image_core' && <ImageStudioPanel activeWorkspace={activeWorkspace} workspaceMeta={workspaceMeta} />}
+            {workspaceMeta?.coreId === 'studio_video_core' && <VideoStudioPanel activeWorkspace={activeWorkspace} workspaceMeta={workspaceMeta} />}
+            {workspaceMeta?.coreId === 'ecommerce_core' && <EcommerceCorePanel workspaceMeta={workspaceMeta} />}
             {workspaceMeta?.coreId === 'ec_image_core' && <ImageTransformPanel activeWorkspace={activeWorkspace} workspaceMeta={workspaceMeta} />}
-            {workspaceMeta?.coreId === 'content_core' && <CockpitPlaceholder title="内容驾驶舱" engine="短视频创作引擎" icon={MonitorPlay} themeColor="text-teal-400" />}
-            {workspaceMeta?.coreId === 'film_core' && <CockpitPlaceholder title="制片驾驶舱" engine="影视 & 短剧引擎" icon={Film} themeColor="text-purple-400" />}
-            {workspaceMeta?.coreId === 'design_core' && <CockpitPlaceholder title="视觉设计驾驶舱" engine="创意 & 空间设计引擎" icon={Palette} themeColor="text-cyan-400" />}
+            {workspaceMeta?.coreId === 'ec_video_core' && <VideoGenPanel activeWorkspace={activeWorkspace} workspaceMeta={workspaceMeta} />}
+            {workspaceMeta?.coreId === 'ec_batch_core' && <BatchFissionPanel activeWorkspace={activeWorkspace} workspaceMeta={workspaceMeta} />}
+            {workspaceMeta?.coreId === 'content_core' && <EngineCockpitPanel activeWorkspace={activeWorkspace} workspaceMeta={workspaceMeta} />}
+            {workspaceMeta?.coreId === 'film_core' && <EngineCockpitPanel activeWorkspace={activeWorkspace} workspaceMeta={workspaceMeta} />}
+            {workspaceMeta?.coreId === 'design_core' && <EngineCockpitPanel activeWorkspace={activeWorkspace} workspaceMeta={workspaceMeta} />}
           </>
         ) : (
           <div className="animate-in fade-in duration-300">
@@ -129,7 +124,7 @@ export default function AiHubView() {
             <section ref={engineMatrixRef} className="bg-zinc-50 py-14 px-8 border-t border-zinc-200 w-full">
               <div className="max-w-7xl mx-auto">
                 <div className="mb-12 text-center">
-                  <h3 className="text-sm font-black text-zinc-400 uppercase tracking-[0.3em]">YuMatrix AI Engine Matrix</h3>
+                  <h3 className="text-sm font-black text-zinc-400 uppercase tracking-[0.3em]">YuMatrix Studio AI Engine Matrix</h3>
                   <p className="text-3xl font-black text-zinc-900 mt-3 tracking-tight">选择你的 AI 引擎，开启创造</p>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10">
@@ -141,8 +136,8 @@ export default function AiHubView() {
                     </div>
                     <ul className="space-y-2">
                       {section.items.map((item) => {
-                        const coreId = item.type === 'video' ? 'vid_core' : item.type === 'music' ? 'aud_core' : item.type === 'text' ? 'txt_core' : item.type === 'ecommerce' ? 'ecommerce_core' : item.type === 'content_studio' ? 'content_core' : item.type === 'film_studio' ? 'film_core' : item.type === 'design_studio' ? 'design_core' : item.type === 'ec_image' ? 'ec_image_core' : 'img_core';
-                        const coreDescs = { img_core: '视觉设计', vid_core: '视频混剪', aud_core: '声音工坊', txt_core: '智脑企划', ecommerce_core: '电商增长引擎', content_core: '短视频创作引擎', film_core: '影视短剧引擎', design_core: '创意设计引擎', ec_image_core: '电商图像工坊' };
+                        const coreId = item.type === 'video' ? 'studio_video_core' : item.type === 'music' ? 'aud_core' : item.type === 'text' ? 'txt_core' : item.type === 'ecommerce' ? 'ecommerce_core' : item.type === 'content_studio' ? 'content_core' : item.type === 'film_studio' ? 'film_core' : item.type === 'design_studio' ? 'design_core' : item.type === 'ec_image' ? 'ec_image_core' : item.type === 'ec_video' ? 'ec_video_core' : item.type === 'ec_batch' ? 'ec_batch_core' : 'studio_image_core';
+                        const coreDescs = { studio_image_core: '图像工坊', studio_video_core: '视频工坊', aud_core: '声音工坊', txt_core: '智脑企划', ecommerce_core: '电商增长引擎', content_core: '短视频创作引擎', film_core: '影视短剧引擎', design_core: '创意设计引擎', ec_image_core: '电商图像工坊', ec_video_core: '电商视频工坊', ec_batch_core: '电商批量裂变' };
                         if (item.isCockpit) {
                           return (
                             <li key={item.id} onClick={() => launchWorkspaceDirectly(item.id, coreId, item.name, coreDescs[coreId], item.template)} className="cursor-pointer group mb-3">

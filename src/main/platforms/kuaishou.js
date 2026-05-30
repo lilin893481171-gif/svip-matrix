@@ -254,14 +254,14 @@ export async function runBatchPin(page, targetVideos, replyText, randomSleep) {
  * 4. 快手：精准回复模块 (完全匹配你抓的 DOM)
  */
 export async function runReply(page, msg, replyText, randomSleep) {
-    console.log(`🚀 [降临引擎] 正在空降快手评论管理页...`);
+    console.log(`🚀 [执行引擎] 正在导航至快手评论管理页...`);
     await navigateToKuaishouComments(page, randomSleep);
 
     const videoTitleMatch = msg.content.match(/\[视频:\s*([\s\S]*?)\]/);
     const targetVideoTitle = videoTitleMatch ? videoTitleMatch[1].trim() : null;
 
     if (targetVideoTitle && targetVideoTitle !== '快手作品') {
-        console.log(`🎬 [机甲导航] 准备切换至快手视频: [${targetVideoTitle.substring(0, 10)}]`);
+        console.log(`🎬 [页面导航] 准备切换至快手视频: [${targetVideoTitle.substring(0, 10)}]`);
         await selectTargetVideoInDialog(page, targetVideoTitle, randomSleep);
     }
 
@@ -316,7 +316,7 @@ export async function runReply(page, msg, replyText, randomSleep) {
                 const sendBtn = page.locator('.sure-btn:visible').filter({ hasText: '确认' }).last();
                 if (await sendBtn.isVisible()) {
                     await sendBtn.click();
-                    console.log(`🔥 [降临引擎] 快手回复物理击发成功！`);
+                    console.log(`🔥 [执行引擎] 快手回复发送成功！`);
                 } else { await page.keyboard.press('Enter'); }
             } else { console.log(`❌ 未能捕获到快手弹出的回复框。`); }
         } catch (e) { console.log(`❌ 快手回复执行异常:`, e.message); }

@@ -1,10 +1,10 @@
 /**
  * @file account-browser-manager.js
- * @title 原生账户沙盒引擎 — 零 Playwright 依赖，纯 Electron BrowserView
+ * @title 原生账户会话管理引擎 — 零 Playwright 依赖，纯 Electron BrowserView
  * @desc 替代 browser-manager.js 的 launchSandbox，用于账户登录场景。
- *       指纹生成沿用 fingerprint-generator (纯JS)，
- *       注入通道使用 webContents.debugger (CDP Page.addScriptToEvaluateOnNewDocument)，
- *       代理使用 session.setProxy()，持久化使用 persist: 分区。
+ * 指纹生成沿用 fingerprint-generator (纯JS)，
+ * 注入通道使用 webContents.debugger (CDP Page.addScriptToEvaluateOnNewDocument)，
+ * 代理使用 session.setProxy()，持久化使用 persist: 分区。
  */
 
 import { BrowserView, BrowserWindow } from 'electron';
@@ -32,7 +32,7 @@ const sslRetryCount = new Map();  // 防 SSL 重试死循环
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ======================================
-// 1. 安全读写工具 (与 browser-manager.js 兼容)
+// 1. 安全读写工具
 // ======================================
 
 function secureAtomicWriteFileSync(filePath, data, accountId) {
@@ -71,23 +71,23 @@ function secureReadFileSync(filePath, accountId) {
 }
 
 // ======================================
-// 2. 指纹生成 (fingerprint-generator 纯JS，无 Playwright 依赖)
+// 2. 指纹生成 (fingerprint-generator 纯JS)
 // ======================================
 
-function getOrCreateFingerprint(accountId) {
+export function getOrCreateSessionProfile(accountId) {
   const fingerprintPath = path.join(FINGERPRINTS_DIR, `${accountId}.json.enc`);
 
   if (fs.existsSync(fingerprintPath)) {
     try {
       const data = secureReadFileSync(fingerprintPath, accountId);
-      console.log(`[原生沙盒] 加载账号 [${accountId}] 的固定硬件指纹`);
+      console.log(`[Session Manager] 加载账号 [${accountId}] 的固定硬件指纹`);
       return data;
     } catch (error) {
-      console.warn(`[原生沙盒] 账号 [${accountId}] 指纹文件损坏，重新生成`);
+      console.warn(`[Session Manager] 账号 [${accountId}] 指纹文件损坏，重新生成`);
     }
   }
 
-  console.log(`[原生沙盒] 为账号 [${accountId}] 生成全新固定硬件指纹`);
+  console.log(`[Session Manager] 为账号 [${accountId}] 生成全新固定硬件指纹`);
   const generator = new FingerprintGenerator({
     devices: ['desktop'],
     browsers: [{ name: 'chrome', minVersion: 125, maxVersion: 130 }],
@@ -110,15 +110,15 @@ function getOrCreateFingerprint(accountId) {
 }
 
 // ======================================
-// 3. 反指纹注入脚本构建
+// 3. 会话环境注入脚本构建 (终极防线)
 // ======================================
 
-function buildAntiFingerprintScript(fp, accountId) {
+export function buildSessionEnvironmentScript(fp, accountId) {
   const nav = fp.navigator || {};
   const screen = fp.screen || {};
   const webgl = fp.webgl || {};
 
-  // 基于 accountId 的确定性哈希种子 (AudioContext / WebGL 噪声用)
+  // 基于 accountId 的确定性哈希种子
   var seed = String(accountId).split('').reduce(function(s, c) { return ((s << 5) - s) + c.charCodeAt(0) | 0; }, 0);
 
   return `
@@ -129,7 +129,7 @@ function buildAntiFingerprintScript(fp, accountId) {
     const scr = ${JSON.stringify(screen)};
     const wgl = ${JSON.stringify(webgl)};
 
-    // 简易确定性随机 (Mulberry32, 基于 accountId seed)
+    // 简易确定性随机 (Mulberry32)
     function detRandom() {
       __seed__ |= 0; __seed__ = __seed__ + 0x6D2B79F5 | 0;
       var t = Math.imul(__seed__ ^ __seed__ >>> 15, 1 | __seed__);
@@ -137,181 +137,257 @@ function buildAntiFingerprintScript(fp, accountId) {
       return ((t ^ t >>> 14) >>> 0) / 4294967296;
     }
 
-    // ---- navigator 属性 ----
-    const navProps = {
-      webdriver: { get: () => undefined },
-      hardwareConcurrency: { get: () => nav.hardwareConcurrency || 8 },
-      deviceMemory: { get: () => nav.deviceMemory || 8 },
-      platform: { get: () => 'Win32' },
-      maxTouchPoints: { get: () => 0 },
-      languages: { get: () => ['zh-CN', 'zh', 'en'] },
-      plugins: { get: () => {
-        var len = 5;
-        var arr = new Array(len);
-        for (var i = 0; i < len; i++) {
-          arr[i] = {
-            name: 'Chrome PDF Plugin',
-            filename: 'internal-pdf-viewer',
-            description: 'Portable Document Format',
-            length: 1,
-            item: function() { return null; },
-            namedItem: function() { return null; }
-          };
-        }
-        Object.defineProperty(arr, 'length', { value: len });
-        return arr;
-      }},
-      cookieEnabled: { get: () => true },
-      doNotTrack: { get: () => null },
-      vendor: { get: () => 'Google Inc.' },
-      vendorSub: { get: () => '' },
-      productSub: { get: () => '20030107' },
-      appVersion: { get: () => nav.userAgent ? nav.userAgent.replace('Mozilla/', '') : '5.0' },
-      appCodeName: { get: () => 'Mozilla' },
-      appName: { get: () => 'Netscape' },
-    };
-    Object.defineProperties(Navigator.prototype, navProps);
-
-    // ---- screen 属性 ----
-    if (scr.width && scr.height) {
-      Object.defineProperties(Screen.prototype, {
-        width: { get: () => scr.width },
-        height: { get: () => scr.height },
-        availWidth: { get: () => scr.width },
-        availHeight: { get: () => scr.height - 40 },
-        colorDepth: { get: () => scr.colorDepth || 24 },
-        pixelDepth: { get: () => scr.colorDepth || 24 },
-      });
+    // 无状态空间哈希 (防漂移)
+    function getStatelessNoise(seed, index) {
+      var h = Math.imul(seed + index | 0, 0x85ebca6b);
+      h ^= h >>> 13;
+      h = Math.imul(h, 0xc2b2ae35);
+      h ^= h >>> 16;
+      return h;
     }
 
-    // ---- Canvas 指纹噪声 (HTMLCanvasElement.toDataURL 拦截, 随机多点噪声) ----
-    var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toDataURL = function() {
-      var ctx = this.getContext('2d');
-      if (ctx) {
+    // 🌟 终极修复：原生函数 toString 伪装 (防止俄罗斯套娃级泄漏)
+    var _nativeStrings = new WeakMap();
+    function makeNative(fn, name) {
+      _nativeStrings.set(fn, 'function ' + name + '() { [native code] }');
+      return fn;
+    }
+    var _origFuncToString = Function.prototype.toString;
+    Function.prototype.toString = makeNative(function() {
+      if (_nativeStrings.has(this)) return _nativeStrings.get(this);
+      return _origFuncToString.call(this);
+    }, 'toString');
+
+    // ---- navigator 属性伪装 ----
+    try {
+      var navDefs = [
+        ['webdriver', undefined],
+        ['hardwareConcurrency', nav.hardwareConcurrency || 8],
+        ['deviceMemory', nav.deviceMemory || 8],
+        ['platform', 'Win32'],
+        ['maxTouchPoints', 0],
+        ['languages', ['zh-CN', 'zh', 'en']],
+        ['cookieEnabled', true],
+        ['doNotTrack', null],
+        ['vendor', 'Google Inc.'],
+        ['vendorSub', ''],
+        ['productSub', '20030107'],
+        ['appCodeName', 'Mozilla'],
+        ['appName', 'Netscape']
+      ];
+      for (var i = 0; i < navDefs.length; i++) {
         try {
-          var w = this.width, h = this.height;
-          for (var i = 0; i < 5; i++) {
-            var x = Math.floor(Math.random() * w);
-            var y = Math.floor(Math.random() * h);
-            var px = ctx.getImageData(x, y, 1, 1);
-            px.data[0] = (px.data[0] + Math.floor(Math.random() * 3) + 1) % 256;
-            ctx.putImageData(px, x, y);
-          }
+          Object.defineProperty(Navigator.prototype, navDefs[i][0], {
+            get: function(v) { return function() { return v; }; }(navDefs[i][1]),
+            configurable: true
+          });
         } catch(e) {}
       }
-      return origToDataURL.apply(this, arguments);
-    };
+      try {
+        Object.defineProperty(Navigator.prototype, 'plugins', {
+          get: function() {
+            var len = 5;
+            var arr = new Array(len);
+            for (var j = 0; j < len; j++) {
+              arr[j] = {
+                name: 'Chrome PDF Plugin',
+                filename: 'internal-pdf-viewer',
+                description: 'Portable Document Format',
+                length: 1,
+                item: function() { return null; },
+                namedItem: function() { return null; }
+              };
+            }
+            Object.defineProperty(arr, 'length', { value: len });
+            return arr;
+          },
+          configurable: true
+        });
+      } catch(e) {}
+      try {
+        Object.defineProperty(Navigator.prototype, 'appVersion', {
+          get: function() { return nav.userAgent ? nav.userAgent.replace('Mozilla/', '') : '5.0'; },
+          configurable: true
+        });
+      } catch(e) {}
+    } catch(e) {}
 
-    // ---- WebGL 指纹伪装 (42 参数, 无指纹数据时用硬编码默认值兜底) ----
-    var _vendor = wgl.vendor || 'Intel Inc.';
-    var _renderer = wgl.renderer || 'Intel Iris OpenGL Engine';
-    var _version = wgl.version || 'WebGL 1.0 (OpenGL ES 2.0 Chromium)';
-    var _slv = wgl.shadingLanguageVersion || 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)';
+    // ---- screen 属性伪装 (双重覆盖防穿透) ----
+    try {
+      var _w = scr.width || 1920;
+      var _h = scr.height || 1080;
+      var _cd = scr.colorDepth || 24;
+      var scrDefs = [
+        ['width', _w],
+        ['height', _h],
+        ['availWidth', _w],
+        ['availHeight', _h - 40],
+        ['colorDepth', _cd],
+        ['pixelDepth', _cd]
+      ];
+      for (var i = 0; i < scrDefs.length; i++) {
+        try {
+          Object.defineProperty(Screen.prototype, scrDefs[i][0], {
+            get: function(v) { return function() { return v; }; }(scrDefs[i][1]),
+            configurable: true
+          });
+        } catch(e) {}
+      }
+      try {
+        Object.defineProperty(screen, 'width', { get: function() { return _w; }, configurable: true });
+        Object.defineProperty(screen, 'height', { get: function() { return _h; }, configurable: true });
+        Object.defineProperty(screen, 'availWidth', { get: function() { return _w; }, configurable: true });
+        Object.defineProperty(screen, 'availHeight', { get: function() { return _h - 40; }, configurable: true });
+        Object.defineProperty(screen, 'colorDepth', { get: function() { return _cd; }, configurable: true });
+        Object.defineProperty(screen, 'pixelDepth', { get: function() { return _cd; }, configurable: true });
+      } catch(e) {}
+    } catch(e) {}
+
+    // ---- Canvas 指纹无状态空间噪声 ----
+    try {
+    var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = makeNative(function(type, quality) {
+      try {
+        if (this.width > 0 && this.height > 0) {
+          var offscreen = document.createElement('canvas');
+          offscreen.width = this.width;
+          offscreen.height = this.height;
+          var ctx2d = offscreen.getContext('2d', { willReadFrequently: true });
+          if (ctx2d) {
+            ctx2d.drawImage(this, 0, 0);
+            var imgData = ctx2d.getImageData(0, 0, offscreen.width, offscreen.height);
+            var d = imgData.data;
+            var numPixels = Math.min(10, Math.floor(d.length / 4));
+            for (var i = 0; i < numPixels; i++) {
+              var pixelIndex = (getStatelessNoise(__seed__, i * 999) >>> 0) % (offscreen.width * offscreen.height);
+              var dataIndex = pixelIndex * 4;
+              if (dataIndex < d.length) {
+                d[dataIndex] = d[dataIndex] ^ 1;
+              }
+            }
+            ctx2d.putImageData(imgData, 0, 0);
+            return origToDataURL.call(offscreen, type, quality);
+          }
+        }
+      } catch(e) {}
+      return origToDataURL.apply(this, arguments);
+    }, 'toDataURL');
+    } catch(e) {}
+
+    // ---- WebGL 1.0 & 2.0 指纹伪装 ----
+    try {
+      var _vendor = wgl.vendor || 'Intel Inc.';
+      var _renderer = wgl.renderer || 'Intel Iris OpenGL Engine';
+      var _version = wgl.version || 'WebGL 1.0 (OpenGL ES 2.0 Chromium)';
+      var _slv = wgl.shadingLanguageVersion || 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)';
+      
       var origGetParam = WebGLRenderingContext.prototype.getParameter;
       var origGetExt = WebGLRenderingContext.prototype.getExtension;
       var origGetSuppExt = WebGLRenderingContext.prototype.getSupportedExtensions;
 
-      // 常量映射 (WebGL 1.0 + WebGL 2.0 常用被检测参数)
       var spoofed = new Map([
-        // -- 身份信息 --
-        [37445, _vendor],                    // UNMASKED_VENDOR_WEBGL
-        [37446, _renderer],                  // UNMASKED_RENDERER_WEBGL
-        [7936, _vendor],                     // VENDOR
-        [7937, _renderer],                   // RENDERER
+        [37445, _vendor],
+        [37446, _renderer],
+        [7936, _vendor],
+        [7937, _renderer],
         [7938, _version],
         [35724, _slv],
-        // -- 纹理/视口上限 --
-        [3379, 16384],                          // MAX_TEXTURE_SIZE
-        [3386, new Int32Array([16384, 16384])],// MAX_VIEWPORT_DIMS
-        [34024, 16384],                         // MAX_RENDERBUFFER_SIZE
-        [34076, 16384],                         // MAX_CUBE_MAP_TEXTURE_SIZE
-        [34047, 16],                            // MAX_TEXTURE_MAX_ANISOTROPY_EXT
-        // -- 顶点/着色器能力 --
-        [34921, 16],                            // MAX_VERTEX_ATTRIBS
-        [36347, 4096],                          // MAX_VERTEX_UNIFORM_VECTORS
-        [36348, 32],                            // MAX_VARYING_VECTORS
-        [36349, 1024],                          // MAX_FRAGMENT_UNIFORM_VECTORS
-        [35661, 80],                            // MAX_COMBINED_TEXTURE_IMAGE_UNITS
-        [35660, 16],                            // MAX_VERTEX_TEXTURE_IMAGE_UNITS
-        [34930, 16],                            // MAX_TEXTURE_IMAGE_UNITS
-        // -- 精度范围 --
-        [33902, new Float32Array([1, 1])],     // ALIASED_LINE_WIDTH_RANGE
-        [33901, new Float32Array([1, 1024])],  // ALIASED_POINT_SIZE_RANGE
-        // -- 像素/颜色位深 --
-        [34964, 8],                             // SUBPIXEL_BITS
-        [35658, 8],                             // RED_BITS
-        [35659, 8],                             // GREEN_BITS
-        [35663, 8],                             // BLUE_BITS
-        [35662, 8],                             // ALPHA_BITS
-        [35664, 24],                            // DEPTH_BITS
-        [35665, 8],                             // STENCIL_BITS
-        // -- 压缩纹理格式 --
+        [3379, 16384],
+        [3386, new Int32Array([16384, 16384])],
+        [34024, 16384],
+        [34076, 16384],
+        [34047, 16],
+        [34921, 16],
+        [36347, 4096],
+        [36348, 32],
+        [36349, 1024],
+        [35661, 80],
+        [35660, 16],
+        [34930, 16],
+        [33902, new Float32Array([1, 1])],
+        [33901, new Float32Array([1, 1024])],
+        [34964, 8],
+        [35658, 8],
+        [35659, 8],
+        [35663, 8],
+        [35662, 8],
+        [35664, 24],
+        [35665, 8],
         [34467, new Uint32Array([0x83F0, 0x83F1, 0x83F2, 0x83F3, 0x9274])],
-        // -- WebGL 2.0 额外参数 --
-        [34852, 8],                             // MAX_DRAW_BUFFERS
-        [36063, 8],                             // MAX_COLOR_ATTACHMENTS
-        [36183, 16],                            // MAX_SAMPLES
-        [35371, 14],                            // MAX_VERTEX_UNIFORM_BLOCKS
-        [35373, 14],                            // MAX_FRAGMENT_UNIFORM_BLOCKS
-        [35374, 28],                            // MAX_COMBINED_UNIFORM_BLOCKS
-        [35375, 72],                            // MAX_UNIFORM_BUFFER_BINDINGS
-        [35376, 65536],                         // MAX_UNIFORM_BLOCK_SIZE
-        [35377, 233472],                        // MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS
-        [35379, 233472],                        // MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS
-        [35981, 4294967295],                    // MAX_ELEMENT_INDEX
-        [35368, 128],                           // MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS
-        [35369, 4],                             // MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS
-        [35370, 4],                             // MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS
+        [34852, 8],
+        [36063, 8],
+        [36183, 16],
+        [35371, 14],
+        [35373, 14],
+        [35374, 28],
+        [35375, 72],
+        [35376, 65536],
+        [35377, 233472],
+        [35379, 233472],
+        [35981, 4294967295],
+        [35368, 128],
+        [35369, 4],
+        [35370, 4]
       ]);
 
-      // 受控扩展列表
-      var spoofedExtensions = [
-        'EXT_texture_filter_anisotropic',
-        'EXT_color_buffer_float',
-        'EXT_float_blend',
-        'EXT_disjoint_timer_query',
-        'EXT_clip_cull_distance',
-        'OES_texture_float',
-        'OES_texture_float_linear',
-        'OES_texture_half_float',
-        'OES_texture_half_float_linear',
-        'OES_standard_derivatives',
-        'OES_element_index_uint',
-        'OES_fbo_render_mipmap',
-        'WEBGL_compressed_texture_s3tc',
-        'WEBGL_compressed_texture_s3tc_srgb',
-        'WEBGL_debug_renderer_info',
-        'WEBGL_debug_shaders',
-        'WEBGL_lose_context',
-        'WEBGL_depth_texture',
-        'WEBGL_draw_buffers',
-        'WEBGL_multi_draw',
-      ];
-
-      WebGLRenderingContext.prototype.getExtension = function(name) {
+      WebGLRenderingContext.prototype.getExtension = makeNative(function(name) {
         return origGetExt.call(this, name);
-      };
-      WebGLRenderingContext.prototype.getSupportedExtensions = function() {
+      }, 'getExtension');
+      WebGLRenderingContext.prototype.getSupportedExtensions = makeNative(function() {
         return origGetSuppExt.call(this);
-      };
-      WebGLRenderingContext.prototype.getParameter = function(p) {
+      }, 'getSupportedExtensions');
+      WebGLRenderingContext.prototype.getParameter = makeNative(function(p) {
         if (spoofed.has(p)) return spoofed.get(p);
         return origGetParam.call(this, p);
-      };
+      }, 'getParameter');
 
-      // WebGL 2.0 同步覆盖
+      var origReadPixels = WebGLRenderingContext.prototype.readPixels;
+      WebGLRenderingContext.prototype.readPixels = makeNative(function(x, y, width, height, format, type, pixels) {
+        origReadPixels.apply(this, arguments);
+        if (pixels && pixels.length > 0) {
+          for (var i = 0; i < pixels.length; i += 4) {
+            var noise = getStatelessNoise(__seed__, i) % 3;
+            pixels[i] = (pixels[i] + noise) % 256;
+          }
+        }
+      }, 'readPixels');
+
       if (typeof WebGL2RenderingContext !== 'undefined') {
-        WebGL2RenderingContext.prototype.getParameter = WebGLRenderingContext.prototype.getParameter;
-        WebGL2RenderingContext.prototype.getExtension = WebGLRenderingContext.prototype.getExtension;
-        WebGL2RenderingContext.prototype.getSupportedExtensions = WebGLRenderingContext.prototype.getSupportedExtensions;
-      }
+        var origGetParam2 = WebGL2RenderingContext.prototype.getParameter;
+        WebGL2RenderingContext.prototype.getParameter = makeNative(function(p) {
+          if (spoofed.has(p)) return spoofed.get(p);
+          return origGetParam2.call(this, p);
+        }, 'getParameter');
 
-    // ---- AudioContext 指纹噪声 (确定性种子, 基于 accountId) ----
+        var origGetExt2 = WebGL2RenderingContext.prototype.getExtension;
+        WebGL2RenderingContext.prototype.getExtension = makeNative(function(name) {
+          return origGetExt2.call(this, name);
+        }, 'getExtension');
+
+        var origGetSuppExt2 = WebGL2RenderingContext.prototype.getSupportedExtensions;
+        WebGL2RenderingContext.prototype.getSupportedExtensions = makeNative(function() {
+          return origGetSuppExt2.call(this);
+        }, 'getSupportedExtensions');
+
+        var origReadPixels2 = WebGL2RenderingContext.prototype.readPixels;
+        WebGL2RenderingContext.prototype.readPixels = makeNative(function(x, y, width, height, format, type, pixels) {
+          origReadPixels2.apply(this, arguments);
+          if (pixels && pixels.length > 0) {
+            for (var i = 0; i < pixels.length; i += 4) {
+              var noise = getStatelessNoise(__seed__, i) % 3;
+              pixels[i] = (pixels[i] + noise) % 256;
+            }
+          }
+        }, 'readPixels');
+      }
+    } catch(e) {}
+
+    // ---- AudioContext 指纹噪声 ----
+    try {
     if (typeof AudioContext !== 'undefined' || typeof webkitAudioContext !== 'undefined') {
       var AC = typeof AudioContext !== 'undefined' ? AudioContext : webkitAudioContext;
       var origCreateOscillator = AC.prototype.createOscillator;
-      AC.prototype.createOscillator = function() {
+      AC.prototype.createOscillator = makeNative(function() {
         var osc = origCreateOscillator.call(this);
         var origStart = osc.start;
         osc.start = function(when) {
@@ -322,61 +398,135 @@ function buildAntiFingerprintScript(fp, accountId) {
           return origStart.call(this, when);
         };
         return osc;
-      };
+      }, 'createOscillator');
       if (AC.prototype.createDynamicsCompressor) {
         var origCreateDynComp = AC.prototype.createDynamicsCompressor;
-        AC.prototype.createDynamicsCompressor = function() {
+        AC.prototype.createDynamicsCompressor = makeNative(function() {
           return origCreateDynComp.call(this);
-        };
+        }, 'createDynamicsCompressor');
       }
     }
+    } catch(e) {}
 
-    // ---- WebRTC IP 泄漏防护 (隐形盾: 真实实例 + 方法覆盖, instanceof 原型链完整) ----
+    // ---- WebRTC IP 泄漏防护 (柔性盾 JS 层兜底) ----
+    try {
     (function() {
       if (typeof RTCPeerConnection === 'undefined') return;
       var _RealRTC = RTCPeerConnection;
+      function maskIPs(str) {
+        return str.replace(/(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/g, function(m, a, b, c, d) {
+          if (m === '0.0.0.0' || a === '127') return m;
+          var h = 0;
+          for (var i = 0; i < m.length; i++) h = ((h << 5) - h) + m.charCodeAt(i) | 0;
+          return '10.' + (((h & 0xFE00) >> 8) | 1) + '.' + ((h & 0xFE) | 1) + '.' + (((h & 0xFE0000) >> 16) | 1);
+        });
+      }
 
       function RTCShield(config) {
         var pc = new _RealRTC(config);
-        // 覆盖实例方法, 阻断所有网络活动
-        pc.createOffer = function() { return Promise.resolve({ type: 'offer', sdp: '' }); };
-        pc.createAnswer = function() { return Promise.resolve({ type: 'answer', sdp: '' }); };
-        pc.setLocalDescription = function() { return Promise.resolve(); };
-        pc.setRemoteDescription = function() { return Promise.resolve(); };
-        pc.addIceCandidate = function() { return Promise.resolve(); };
-        pc.createDataChannel = function() { return { close: function(){}, send: function(){} }; };
-        pc.close = function() {};
-        pc.addEventListener = function() {};
-        pc.removeEventListener = function() {};
-        pc.getStats = function() { return Promise.resolve(new Map()); };
+        var _origCreateOffer = pc.createOffer.bind(pc);
+        pc.createOffer = function() {
+          var args = arguments;
+          return _origCreateOffer.apply(this, args).then(function(offer) {
+            if (offer && offer.sdp) { try { return { type: offer.type, sdp: maskIPs(offer.sdp) }; } catch(e) {} }
+            return offer;
+          });
+        };
+        var _origCreateAnswer = pc.createAnswer.bind(pc);
+        pc.createAnswer = function() {
+          var args = arguments;
+          return _origCreateAnswer.apply(this, args).then(function(answer) {
+            if (answer && answer.sdp) { try { return { type: answer.type, sdp: maskIPs(answer.sdp) }; } catch(e) {} }
+            return answer;
+          });
+        };
+        var _origSetLocal = pc.setLocalDescription.bind(pc);
+        pc.setLocalDescription = function(desc) {
+          if (desc && desc.sdp) { try { desc = { type: desc.type, sdp: maskIPs(desc.sdp) }; } catch(e) {} }
+          return _origSetLocal(desc);
+        };
+        var _origAddIce = pc.addIceCandidate.bind(pc);
+        pc.addIceCandidate = function(cand) {
+          if (cand && cand.candidate) {
+            try { cand = { candidate: maskIPs(cand.candidate), sdpMid: cand.sdpMid, sdpMLineIndex: cand.sdpMLineIndex }; } catch(e) {}
+          }
+          return _origAddIce(cand);
+        };
+        var _origAddEventListener = pc.addEventListener.bind(pc);
+        pc.addEventListener = function(type, listener, options) {
+          if (type === 'icecandidate') {
+            var wrappedListener = function(e) {
+              if (e && e.candidate && e.candidate.candidate) {
+                try {
+                  var fakeEvent = Object.create(e);
+                  fakeEvent.candidate = {
+                    candidate: maskIPs(e.candidate.candidate),
+                    sdpMid: e.candidate.sdpMid,
+                    sdpMLineIndex: e.candidate.sdpMLineIndex,
+                    address: e.candidate.address,
+                    port: e.candidate.port,
+                    protocol: e.candidate.protocol,
+                    type: e.candidate.type,
+                    tcpType: e.candidate.tcpType,
+                    relatedAddress: e.candidate.relatedAddress,
+                    relatedPort: e.candidate.relatedPort,
+                    usernameFragment: e.candidate.usernameFragment
+                  };
+                  return listener(fakeEvent);
+                } catch(ex) { return listener(e); }
+              }
+              return listener(e);
+            };
+            return _origAddEventListener(type, wrappedListener, options);
+          }
+          return _origAddEventListener(type, listener, options);
+        };
+        var _origCreateDC = pc.createDataChannel.bind(pc);
+        pc.createDataChannel = function(label, opts) { return _origCreateDC(label, opts); };
+
+        // onicecandidate: 先走原生 setter 注册 wrapper 到 C++ 事件 map, 再 shadow 属性
+        var _userIceHandler = null;
+        pc.onicecandidate = function(e) {
+          if (_userIceHandler) {
+            if (e && e.candidate && e.candidate.candidate) {
+              try {
+                var fakeEvent = Object.create(e);
+                fakeEvent.candidate = {
+                  candidate: maskIPs(e.candidate.candidate),
+                  sdpMid: e.candidate.sdpMid,
+                  sdpMLineIndex: e.candidate.sdpMLineIndex,
+                  address: e.candidate.address,
+                  port: e.candidate.port,
+                  protocol: e.candidate.protocol,
+                  type: e.candidate.type,
+                  tcpType: e.candidate.tcpType,
+                  relatedAddress: e.candidate.relatedAddress,
+                  relatedPort: e.candidate.relatedPort,
+                  usernameFragment: e.candidate.usernameFragment
+                };
+                return _userIceHandler(fakeEvent);
+              } catch(ex) {}
+            }
+            return _userIceHandler(e);
+          }
+        };
+        Object.defineProperty(pc, 'onicecandidate', {
+          get: function() { return _userIceHandler; },
+          set: function(fn) { _userIceHandler = fn; },
+          configurable: true, enumerable: true
+        });
+
         return pc;
       }
       RTCShield.prototype = _RealRTC.prototype;
       RTCShield.prototype.constructor = RTCShield;
 
-      try {
-        Object.defineProperty(window, 'RTCPeerConnection', {
-          value: RTCShield, writable: true, configurable: true
-        });
-      } catch(e) {
-        try { window.RTCPeerConnection = RTCShield; } catch(e2) {}
-      }
-      if (typeof webkitRTCPeerConnection !== 'undefined') {
-        try {
-          Object.defineProperty(window, 'webkitRTCPeerConnection', {
-            value: RTCShield, writable: true, configurable: true
-          });
-        } catch(e) {}
-      }
-      if (typeof mozRTCPeerConnection !== 'undefined') {
-        try {
-          Object.defineProperty(window, 'mozRTCPeerConnection', {
-            value: RTCShield, writable: true, configurable: true
-          });
-        } catch(e) {}
-      }
-      console.log('[Matrix Armor] WebRTC 隐形盾已部署 (真实实例+方法覆盖)');
+      try { Object.defineProperty(window, 'RTCPeerConnection', { value: RTCShield, writable: true, configurable: true }); } catch(e) {}
+      if (typeof webkitRTCPeerConnection !== 'undefined') { try { Object.defineProperty(window, 'webkitRTCPeerConnection', { value: RTCShield, writable: true, configurable: true }); } catch(e) {} }
+      if (typeof mozRTCPeerConnection !== 'undefined') { try { Object.defineProperty(window, 'mozRTCPeerConnection', { value: RTCShield, writable: true, configurable: true }); } catch(e) {} }
+      console.log('[Matrix Shield] WebRTC 网络策略已部署 (SDP/IP 掩码 + onicecandidate 原生setter + addEventListener + CDP STUN/TURN 屏蔽)');
     })();
+    } catch(e) {}
 
     // ---- chrome.runtime 抹除 ----
     if (typeof chrome === 'undefined') {
@@ -396,9 +546,54 @@ function buildAntiFingerprintScript(fp, accountId) {
       };
     }
 
-    console.log('[Matrix Armor] 原生反指纹装甲已部署 (BrowserView/CDP)');
+    // ---- MediaDevices 硬件型号伪装 (防物理隔离泄漏) ----
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+        var origEnumerate = navigator.mediaDevices.enumerateDevices;
+        navigator.mediaDevices.enumerateDevices = makeNative(function() {
+          return origEnumerate.call(this).then(function(devices) {
+            return devices.map(function(device) {
+              var spoofed = {
+                kind: device.kind,
+                deviceId: device.deviceId,
+                groupId: device.groupId,
+                label: device.label
+              };
+              if (device.kind === 'audioinput') {
+                spoofed.label = 'Default - Microphone (High Definition Audio Device)';
+                var fakeId = Math.floor(detRandom() * 1000000000).toString(16);
+                spoofed.deviceId = 'audio-in-' + fakeId;
+                spoofed.groupId = 'group-' + fakeId;
+              } else if (device.kind === 'videoinput') {
+                spoofed.label = 'HD Webcam (' + Math.floor(detRandom() * 1000).toString(16).toUpperCase() + ')';
+                var fakeVid = Math.floor(detRandom() * 1000000000).toString(16);
+                spoofed.deviceId = 'video-in-' + fakeVid;
+                spoofed.groupId = 'group-' + fakeVid;
+              }
+              return spoofed;
+            });
+          });
+        }, 'enumerateDevices');
+      }
+    } catch(e) {}
+
+    // ---- 字体枚举伪装 (queryLocalFonts 拦截) ----
+    if (typeof window.queryLocalFonts === 'function') {
+      var _spoofedFonts = [
+        { family: 'Arial', fullName: 'Arial', postscriptName: 'ArialMT', style: 'Regular' },
+        { family: 'Arial', fullName: 'Arial Bold', postscriptName: 'Arial-BoldMT', style: 'Bold' },
+        { family: 'Times New Roman', fullName: 'Times New Roman', postscriptName: 'TimesNewRomanPSMT', style: 'Regular' },
+        { family: 'Verdana', fullName: 'Verdana', postscriptName: 'Verdana', style: 'Regular' },
+        { family: 'Microsoft YaHei', fullName: 'Microsoft YaHei', postscriptName: 'MicrosoftYaHei', style: 'Regular' }
+      ];
+      window.queryLocalFonts = makeNative(function() {
+        return Promise.resolve(_spoofedFonts);
+      }, 'queryLocalFonts');
+    }
+
+    console.log('[Matrix Shield] 原生会话环境配置已部署 (BrowserView/CDP)');
   } catch (e) {
-    console.warn('[Matrix Armor] 反指纹注入部分失败:', e.message);
+    console.warn('[Matrix Shield] 环境配置注入部分失败:', e.message);
   }
 })();
 `;
@@ -412,10 +607,11 @@ function parseProxyString(proxyStr) {
   if (!proxyStr) return undefined;
   try {
     const parts = proxyStr.trim().split(':');
+    const protocol = 'socks5://'; 
     if (parts.length === 4) {
-      return `http://${parts[2]}:${parts[3]}@${parts[0]}:${parts[1]}`;
+      return `${protocol}${parts[2]}:${parts[3]}@${parts[0]}:${parts[1]}`;
     } else if (parts.length === 2) {
-      return `http://${parts[0]}:${parts[1]}`;
+      return `${protocol}${parts[0]}:${parts[1]}`;
     }
     return proxyStr;
   } catch (e) {
@@ -424,22 +620,14 @@ function parseProxyString(proxyStr) {
 }
 
 // ======================================
-// 5. 核心：原生内嵌沙盒启动
+// 5. 核心：原生嵌入式会话容器启动
 // ======================================
 
-/**
- * 启动原生内嵌账户浏览器
- * @param {string} accountId - 账户唯一ID
- * @param {object} options - { proxy?, headless? }
- * @returns {Promise<{success: boolean, webContents?, view?, sessionId?: string, message?: string}>}
- */
 export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
-  // 统一键为字符串，避免 Map 查找时类型不匹配
   const key = String(accountId);
 
-  // 已有同账号会话 → 先清理
   if (activeSessions.has(key)) {
-    console.log(`[原生沙盒] 账号 ${key} 已有活跃会话，先销毁...`);
+    console.log(`[Session Manager] 账号 ${key} 已有活跃会话，先销毁...`);
     await closeEmbeddedAccountBrowser(key);
   }
 
@@ -447,19 +635,14 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
   if (windows.length === 0) throw new Error('主窗口未找到');
   const mainWindow = windows[0];
 
-  // --- 生成/加载指纹 ---
-  const fingerprintData = getOrCreateFingerprint(key);
+  const fingerprintData = getOrCreateSessionProfile(key);
   const fp = fingerprintData.fingerprint;
   const headers = fingerprintData.headers || {};
+  const sessionEnvironmentScript = buildSessionEnvironmentScript(fp, key);
 
-  // --- 提前构建反指纹脚本 (供 CDP 注入 + did-finish-load 备份注入) ---
-  const antiFingerprintScript = buildAntiFingerprintScript(fp, key);
-
-  // --- 清除可能损坏的持久化分区数据（SSL 会话/HSTS/证书缓存）---
   try {
     const partitionDir = path.join(app.getPath('userData'), 'Partitions', `chrome_data_${key}`);
     if (fs.existsSync(partitionDir)) {
-      // 只删除 SSL 相关文件，保留 Cookies
       const sslFiles = ['TransportSecurity', 'CertificateRevocation', 'CertificateTransparency', 'Cookies-journal'];
       for (const file of sslFiles) {
         const filePath = path.join(partitionDir, file);
@@ -467,78 +650,74 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
           try { fs.unlinkSync(filePath); } catch (e) {}
         }
       }
-      // 清除 Cache 目录 (含 SSL 会话缓存)
       const cacheDir = path.join(partitionDir, 'Cache');
       if (fs.existsSync(cacheDir)) {
         try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch (e) {}
       }
-      console.log(`[原生沙盒] 账号 ${key} 分区 SSL 状态已清理`);
     }
-  } catch (e) {
-    console.warn('[原生沙盒] 清理分区数据失败:', e.message);
-  }
+  } catch (e) {}
 
-  // --- 创建 BrowserView ---
   const view = new BrowserView({
     webPreferences: {
       partition: `persist:chrome_data_${key}`,
-      sandbox: false,
-      contextIsolation: false,
+      sandbox: true,
+      contextIsolation: true,
       webSecurity: false,
       allowRunningInsecureContent: true
     }
   });
 
   mainWindow.addBrowserView(view);
-
+  // 初始离屏渲染尺寸 — 避免页面以 0x0 视口加载导致布局错乱
+  view.setBounds({ x: -10000, y: -10000, width: 1280, height: 800 });
   const wc = view.webContents;
 
-  // --- 转发 BrowserView 控制台消息到主进程 (诊断用) ---
+  // 🌟 核心防御：Session 级 WebRTC 物理隔离 (国内直连模式) 🌟
+  try {
+    if (typeof wc.session.setWebRTCIPHandlingPolicy === 'function') {
+      wc.session.setWebRTCIPHandlingPolicy('default_public_interface_only');
+    }
+  } catch (e) {
+    console.warn('[Session Manager] WebRTC 分区策略设置失败:', e.message);
+  }
+
   wc.on('console-message', (event, level, message) => {
     const prefix = level === 3 ? '[BV:ERROR]' : '[BV:LOG]';
-    if (message && message.includes('[Matrix Armor]')) {
-      console.log(`[原生沙盒-诊断] ${prefix} ${message}`);
+    if (message && message.includes('[Matrix Shield]')) {
+      console.log(`[原生会话容器-诊断] ${prefix} ${message}`);
     }
   });
 
-  // 先声明 sessionData，避免事件处理器中 TDZ 崩溃
   let sessionData = null;
 
-  // --- 清除 SSL 会话缓存，避免上次残留导致协议握手失败 ---
   try {
     await wc.session.clearHostResolverCache();
     await wc.session.clearCache();
-  } catch (e) {
-    console.warn('[原生沙盒] 清除会话缓存失败:', e.message);
-  }
+  } catch (e) {}
 
-  // --- 阻止弹窗外逃 ---
   wc.setWindowOpenHandler(({ url }) => {
     wc.loadURL(url);
     return { action: 'deny' };
   });
 
-  // --- 忽略 SSL 证书错误（代理/自签证书/某些平台 CDN）---
   wc.on('certificate-error', (event, _url, _error, _certificate, callback) => {
     event.preventDefault();
     callback(true);
   });
 
-  // --- 页面加载诊断 + SSL 错误自动恢复 + 备份反指纹注入 ---
   wc.on('did-finish-load', () => {
     try {
       const url = wc.getURL();
-      console.log(`[原生沙盒] 账号 ${key} 页面加载完成: ${url}`);
       if (sessionData) sessionData.currentUrl = url;
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('account-browser-url-changed', { accountId: key, url });
       }
-      // 备份注入: 确保反指纹脚本在每次页面加载后都在 (即使 CDP 注入失败)
       if (url && !url.startsWith('about:') && !url.startsWith('devtools://')) {
-        wc.executeJavaScript(antiFingerprintScript).catch(() => {});
+        wc.executeJavaScript(sessionEnvironmentScript).catch(() => {});
       }
-    } catch (e) { /* 防止事件回调内异常导致原生层崩溃 */ }
+    } catch (e) {}
   });
+
   wc.on('did-navigate', (_event, url) => {
     try {
       if (sessionData) sessionData.currentUrl = url;
@@ -547,91 +726,72 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
       }
     } catch (e) {}
   });
+
   wc.on('did-fail-load', async (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (isMainFrame) {
-      console.error(`[原生沙盒] 账号 ${key} 页面加载失败: ${validatedURL} — ${errorDescription} (code=${errorCode})`);
       const isSSLError = errorCode === -107 || errorCode === -105 || errorCode === -106 || errorCode === -200;
       const retries = sslRetryCount.get(key) || 0;
       if (isSSLError && retries < 2 && validatedURL && !validatedURL.startsWith('about:')) {
         sslRetryCount.set(key, retries + 1);
-        console.log(`[原生沙盒] 检测到 SSL 错误 (code=${errorCode})，清除缓存并重试 (${retries + 1}/2)...`);
         try {
           await wc.session.clearHostResolverCache();
           await wc.session.clearCache();
           await sleep(800);
           wc.loadURL(validatedURL);
-        } catch (retryErr) {
-          console.error(`[原生沙盒] SSL 重试失败:`, retryErr.message);
-        }
+        } catch (retryErr) {}
       }
     }
   });
 
-  // --- 设置 UA ---
   const ua = fp.navigator?.userAgent ||
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
   wc.setUserAgent(ua);
 
-  // --- 设置代理 ---
   if (options.proxy) {
     const proxyRules = parseProxyString(options.proxy);
     if (proxyRules) {
       try {
         await wc.session.setProxy({ proxyRules });
-        console.log(`[原生沙盒] 代理已设置: ${proxyRules}`);
-      } catch (e) {
-        console.warn(`[原生沙盒] 代理设置失败:`, e.message);
-      }
+      } catch (e) {}
     }
   }
 
-  // --- CDP 附加 (用于指纹注入 + 强制桌面视口) ---
   try {
     if (!wc.debugger.isAttached()) {
       wc.debugger.attach('1.3');
     }
-  } catch (e) {
-    console.warn('[原生沙盒] debugger 附加失败:', e.message);
-  }
+  } catch (e) {}
 
-  // --- 加载空白页以初始化 (必须等页面就绪才能注入 CDP 脚本) ---
   await wc.loadURL('about:blank');
   await sleep(500);
 
-  // --- 注入反指纹脚本 (CDP: Page.addScriptToEvaluateOnNewDocument) ---
+  // --- CDP 注入与底层管控 ---
   try {
     if (wc.debugger.isAttached()) {
       await wc.debugger.sendCommand('Page.enable');
+
       await wc.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
-        source: antiFingerprintScript
+        source: sessionEnvironmentScript
       });
-      console.log('[原生沙盒] CDP 反指纹脚本已注入 (Page.addScriptToEvaluateOnNewDocument)');
+      console.log('[Session Manager] CDP CDP 会话环境脚本已注入');
     } else {
-      await wc.executeJavaScript(antiFingerprintScript);
-      console.log('[原生沙盒] 降级模式：反指纹脚本通过 executeJavaScript 注入');
+      await wc.executeJavaScript(sessionEnvironmentScript);
     }
   } catch (e) {
-    console.error('[原生沙盒] CDP 注入失败，尝试降级:', e.message);
-    try { await wc.executeJavaScript(antiFingerprintScript); } catch (e2) {}
+    try { await wc.executeJavaScript(sessionEnvironmentScript); } catch (e2) {}
   }
 
-  // --- CDP 级 WebRTC 防护: 屏蔽 STUN/TURN 服务器域名, 防止真实 IP 泄漏 ---
   try {
     if (wc.debugger.isAttached()) {
       await wc.debugger.sendCommand('Network.setBlockedURLs', {
         urls: ['*://*.stun.*/*', '*://*.turn.*/*', 'stun:*', 'turn:*', '*://*stun*:*/*', '*://*turn*:*/*']
       });
-      console.log('[原生沙盒] CDP WebRTC 防护: STUN/TURN 域名已屏蔽');
     }
-  } catch (e) {
-    console.warn('[原生沙盒] CDP WebRTC 屏蔽失败:', e.message);
-  }
+  } catch (e) {}
 
-  // --- 设置合理初始尺寸 (屏幕外但尺寸正常，加载页面时视口不塌缩) ---
   const [winW, winH] = mainWindow.getSize();
   view.setBounds({ x: -10000, y: -10000, width: Math.round(winW * 0.5), height: Math.round(winH * 0.7) });
 
-  // --- 设置额外请求头 ---
   if (headers['accept-language']) {
     try {
       const ses = wc.session;
@@ -642,7 +802,6 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
     } catch (e) {}
   }
 
-  // --- 存储会话 ---
   sessionData = {
     view,
     webContents: wc,
@@ -653,7 +812,6 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
   };
   activeSessions.set(key, sessionData);
 
-  console.log(`[原生沙盒] 账号 ${key} 原生内嵌浏览器启动成功`);
   return { success: true, webContents: wc, view };
 }
 
@@ -661,16 +819,10 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
 // 6. BrowserView 吸附/隐藏
 // ======================================
 
-/**
- * 将浏览器画面吸附到主窗口的指定区域
- */
 export function attachAccountBrowser(accountId, bounds) {
   const key = String(accountId);
   const session = activeSessions.get(key);
-  if (!session || !session.view) {
-    console.warn(`[原生沙盒] 账号 ${key} 无活跃会话`);
-    return;
-  }
+  if (!session || !session.view) return;
   try {
     if (session.mainWindow && !session.mainWindow.isDestroyed()) {
       session.mainWindow.setTopBrowserView(session.view);
@@ -678,13 +830,13 @@ export function attachAccountBrowser(accountId, bounds) {
   } catch (e) {}
   try {
     session.view.setBounds(bounds);
+    // 自适应缩放：以 1280px 为基准，容器变窄时等比缩小内容
+    const targetWidth = 1280;
+    const zoom = Math.min(1, Math.max(0.25, bounds.width / targetWidth));
+    session.webContents.setZoomFactor(zoom);
   } catch (e) {}
-  console.log(`[原生沙盒] 账号 ${accountId} 已吸附:`, bounds);
 }
 
-/**
- * 将浏览器隐藏到屏幕外 (不销毁)
- */
 export function detachAccountBrowser(accountId) {
   const key = String(accountId);
   const session = activeSessions.get(key);
@@ -698,9 +850,6 @@ export function detachAccountBrowser(accountId) {
 // 7. 关闭与销毁
 // ======================================
 
-/**
- * 关闭并销毁内嵌浏览器
- */
 export async function closeEmbeddedAccountBrowser(accountId) {
   const key = String(accountId);
   const session = activeSessions.get(key);
@@ -709,23 +858,19 @@ export async function closeEmbeddedAccountBrowser(accountId) {
   try {
     if (session.view) {
       const wc = session.view.webContents;
-      // 中止卡死的导航（如 SSL 协议错误），再强制关闭
       try { wc.stop(); } catch (e) {}
       try { wc.close(); } catch (e) {}
       try { wc.debugger.detach(); } catch (e) {}
       try { session.mainWindow.removeBrowserView(session.view); } catch (e) {}
     }
-  } catch (e) {
-    console.error('[原生沙盒] 关闭会话出错:', e.message);
-  }
+  } catch (e) {}
 
   activeSessions.delete(key);
   sslRetryCount.delete(key);
-  console.log(`[原生沙盒] 账号 ${key} 会话已销毁`);
 }
 
 // ======================================
-// 7.5 地址栏导航
+// 7.5 地址栏导航 & 操作
 // ======================================
 
 export function navigateAccountBrowser(accountId, url) {
@@ -746,9 +891,7 @@ export function getAccountBrowserUrl(accountId) {
   if (!session) return null;
   if (session.currentUrl) return session.currentUrl;
   try {
-    if (session.webContents && !session.webContents.isDestroyed()) {
-      return session.webContents.getURL();
-    }
+    if (session.webContents && !session.webContents.isDestroyed()) return session.webContents.getURL();
   } catch (e) {}
   return 'about:blank';
 }
@@ -789,20 +932,13 @@ export function openAccountBrowserDevTools(accountId) {
   return true;
 }
 
-// ======================================
-// 8. 状态查询
-// ======================================
-
 export function getActiveSessions() {
   const sessions = [];
   for (const [id, session] of activeSessions) {
     try {
       let url = 'about:blank';
-      if (session.currentUrl) {
-        url = session.currentUrl;
-      } else if (session.webContents && !session.webContents.isDestroyed()) {
-        url = session.webContents.getURL();
-      }
+      if (session.currentUrl) url = session.currentUrl;
+      else if (session.webContents && !session.webContents.isDestroyed()) url = session.webContents.getURL();
       sessions.push({ accountId: id, currentUrl: url });
     } catch (e) {
       sessions.push({ accountId: id, currentUrl: 'about:blank' });
@@ -816,13 +952,9 @@ export function isNativeSandboxActive(accountId) {
 }
 
 // ======================================
-// 9. Cookie 导出 (供 Playwright 侧使用)
+// 9. Cookie 导出/导入
 // ======================================
 
-/**
- * 将 Electron session 的 cookies 导出为 Playwright storageState 格式
- * 用于将登录态从 BrowserView 同步到 Playwright 自动化流程
- */
 export async function exportCookiesForPlaywright(accountId) {
   const key = String(accountId);
   const session = activeSessions.get(key);
@@ -831,28 +963,17 @@ export async function exportCookiesForPlaywright(accountId) {
   try {
     const cookies = await session.webContents.session.cookies.get({});
     const origins = {};
-
     for (const cookie of cookies) {
       const domain = cookie.domain.startsWith('.') ? cookie.domain : `.${cookie.domain}`;
-      if (!origins[domain]) {
-        origins[domain] = { localStorage: [] };
-      }
+      if (!origins[domain]) origins[domain] = { localStorage: [] };
     }
-
     const state = { cookies, origins };
     const stateFilePath = path.join(STATES_DIR, `${key}.json.enc`);
     secureAtomicWriteFileSync(stateFilePath, state, key);
-    console.log(`[原生沙盒] 账号 ${key} cookies 已导出到 Playwright 兼容格式`);
     return state;
-  } catch (e) {
-    console.error(`[原生沙盒] Cookie 导出失败:`, e.message);
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
-/**
- * 从 Playwright 存储格式导入 cookies 到 Electron session
- */
 export async function importCookiesFromPlaywright(accountId) {
   const key = String(accountId);
   const stateFilePath = path.join(STATES_DIR, `${key}.json.enc`);
@@ -861,7 +982,6 @@ export async function importCookiesFromPlaywright(accountId) {
   try {
     const state = secureReadFileSync(stateFilePath, key);
     if (!state.cookies) return false;
-
     const session = activeSessions.get(key);
     if (!session) return false;
 
@@ -875,17 +995,9 @@ export async function importCookiesFromPlaywright(accountId) {
         secure: cookie.secure || false,
         httpOnly: cookie.httpOnly || false,
       };
-      if (cookie.expires && cookie.expires !== -1) {
-        electronCookie.expirationDate = cookie.expires;
-      }
-      try {
-        await session.webContents.session.cookies.set(electronCookie);
-      } catch (e) {}
+      if (cookie.expires && cookie.expires !== -1) electronCookie.expirationDate = cookie.expires;
+      try { await session.webContents.session.cookies.set(electronCookie); } catch (e) {}
     }
-    console.log(`[原生沙盒] 账号 ${key} cookies 已从 Playwright 格式导入`);
     return true;
-  } catch (e) {
-    console.error(`[原生沙盒] Cookie 导入失败:`, e.message);
-    return false;
-  }
+  } catch (e) { return false; }
 }

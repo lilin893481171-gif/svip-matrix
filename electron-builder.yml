@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: my-app
+appId: com.yumatrix.studio
+productName: yumatrix-studio
 directories:
   buildResources: build
 files:
@@ -11,7 +11,7 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: my-app
+  executableName: yumatrix-studio
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}

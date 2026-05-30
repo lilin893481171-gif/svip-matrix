@@ -102,7 +102,7 @@ export default function InteractionView({ accounts = [] }) {
     const targetVideoObjects = scannedVideos.filter(v => selectedVideos.includes(v.id));
 
     try {
-      const res = await electron.ipcRenderer.invoke('open-reply-sandbox', { 
+      const res = await electron.ipcRenderer.invoke('open-reply-session', {
         messageId: viewMode === 'first_pin' ? 'batch_pin' : activeMsg?.id, 
         replyText: replyText,
         targetVideos: viewMode === 'first_pin' ? targetVideoObjects : []
@@ -118,7 +118,7 @@ export default function InteractionView({ accounts = [] }) {
       } else { 
           alert(`唤起失败: ${res.message}`); 
       }
-    } catch (e) { alert('调用降临引擎失败，请检查控制台。'); }
+    } catch (e) { alert('调用执行引擎失败，请检查控制台。'); }
   };
 
   const handleStartRadar = async () => {
@@ -145,7 +145,7 @@ export default function InteractionView({ accounts = [] }) {
            return [...newItems, ...prev];
         });
       } else if (viewMode === 'first_pin') {
-         alert('⚠️ 未能成功抓取到该账号的最新视频，请确认沙盒是否正常加载。');
+         alert('⚠️ 未能成功抓取到该账号的最新视频，请确认会话容器是否正常加载。');
       }
     } catch (error) {
       alert('雷达发射失败: ' + error.message);
@@ -215,8 +215,8 @@ export default function InteractionView({ accounts = [] }) {
                   {/* 左侧列表显示回复摘要 */}
                   {msg.status === '已回复' && msg.reply_content && (
                     <div className="mt-2 px-2 py-1.5 bg-emerald-50 rounded-md border border-emerald-100 text-[10px] text-emerald-700 line-clamp-1">
-                      <span className="font-bold mr-1">机甲:</span>
-                      {msg.reply_content.replace(/\[沙盒全自动\]\s*|\[沙盒手动\]\s*/g, '')}
+                      <span className="font-bold mr-1">回复:</span>
+                      {msg.reply_content.replace(/\[自动\]\s*|\[手动\]\s*/g, '')}
                     </div>
                   )}
                 </div>
@@ -284,9 +284,9 @@ export default function InteractionView({ accounts = [] }) {
               {activeMsg.status === '已回复' && activeMsg.reply_content && (
                 <div className="flex items-start justify-end mb-6 animate-in slide-in-from-right-4 duration-300">
                   <div className="bg-emerald-500 text-white p-4 rounded-2xl rounded-tr-none shadow-md text-sm max-w-lg">
-                    {formatEmoji(activeMsg.reply_content.replace(/\[沙盒全自动\]\s*|\[沙盒手动\]\s*/g, ''))}
+                    {formatEmoji(activeMsg.reply_content.replace(/\[自动\]\s*|\[手动\]\s*/g, ''))}
                     <div className="text-[10px] text-emerald-100 mt-2 flex justify-end items-center">
-                      <CheckCircle size={10} className="mr-1"/> 已通过机甲发送
+                      <CheckCircle size={10} className="mr-1"/> 已通过系统发送
                     </div>
                   </div>
                   <div className="w-10 h-10 rounded-full bg-slate-900 border border-slate-700 text-red-500 flex items-center justify-center font-black shadow-sm ml-3 flex-shrink-0">
@@ -301,14 +301,14 @@ export default function InteractionView({ accounts = [] }) {
             <div className="flex flex-col items-center justify-center h-full text-slate-400 animate-in zoom-in-95">
               <Video size={48} className="mb-4 text-orange-200" />
               <p className="text-sm">已锁定 {selectedVideos.length} 个跨平台视频实体</p>
-              <p className="text-xs mt-2">请在下方配置您的“引流转化话术”，点击按钮将由沙盒自动降临执行</p>
+              <p className="text-xs mt-2">请在下方配置您的“营销转化话术”，点击按钮将由自动执行</p>
             </div>
           )}
         </div>
 
         <div className="p-4 border-t border-slate-200 bg-white">
           <div className="mb-3 flex flex-wrap gap-2">
-            <span className="text-xs font-medium text-slate-500 flex items-center bg-slate-100 px-2 py-1 rounded"><ShoppingBag size={14} className="mr-1 text-orange-500"/> 电商引流话术:</span>
+            <span className="text-xs font-medium text-slate-500 flex items-center bg-slate-100 px-2 py-1 rounded"><ShoppingBag size={14} className="mr-1 text-orange-500"/> 电商营销话术:</span>
             <button onClick={() => setReplyText('🎉 视频同款已上架主页橱窗，喜欢的朋友可以直接下单哦~ 🛒')} className="text-xs border border-orange-200 text-orange-600 bg-orange-50 px-3 py-1 rounded-full hover:bg-orange-100 transition whitespace-nowrap">橱窗引导 (首评置顶)</button>
             <button onClick={() => setReplyText('👇 感谢大家喜欢！左下角小黄车链接可以直接购买同款哦！')} className="text-xs border border-orange-200 text-orange-600 bg-orange-50 px-3 py-1 rounded-full hover:bg-orange-100 transition whitespace-nowrap">小黄车引导</button>
             
@@ -324,7 +324,7 @@ export default function InteractionView({ accounts = [] }) {
               <textarea 
                 value={replyText} onChange={e => setReplyText(e.target.value)} 
                 disabled={(viewMode === 'comments' && !activeMsg) || (viewMode === 'first_pin' && selectedVideos.length === 0)}
-                placeholder={(viewMode === 'comments' && !activeMsg) ? "请先选择一条评论" : (viewMode === 'first_pin' && selectedVideos.length === 0) ? "请先在左侧勾选需要置顶的视频" : "输入您的回复或首评引流内容..."} 
+                placeholder={(viewMode === 'comments' && !activeMsg) ? "请先选择一条评论" : (viewMode === 'first_pin' && selectedVideos.length === 0) ? "请先在左侧勾选需要置顶的视频" : "输入您的回复或首评营销内容..."} 
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 pb-14 outline-none focus:border-emerald-500 text-sm resize-none transition disabled:opacity-50"
                 style={{ minHeight: '110px' }}
               ></textarea>
@@ -335,7 +335,7 @@ export default function InteractionView({ accounts = [] }) {
                   disabled={!replyText.trim() || (viewMode === 'comments' && !activeMsg) || (viewMode === 'first_pin' && selectedVideos.length === 0)} 
                   className={`text-white font-bold py-2 px-4 rounded-lg shadow-md transition flex items-center text-sm disabled:opacity-50 active:scale-95 ${viewMode === 'first_pin' ? 'bg-orange-600 hover:bg-orange-700 disabled:bg-slate-300' : 'bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300'}`}
                 >
-                  {viewMode === 'first_pin' ? <><Pin size={14} className="mr-1.5"/>唤起沙盒：批量下发置顶</> : <><Shield size={14} className="mr-1.5"/>唤起沙盒：回复评论</>}
+                  {viewMode === 'first_pin' ? <><Pin size={14} className="mr-1.5"/>启动会话：批量下发置顶</> : <><Shield size={14} className="mr-1.5"/>启动会话：回复评论</>}
                 </button>
               </div>
             </div>

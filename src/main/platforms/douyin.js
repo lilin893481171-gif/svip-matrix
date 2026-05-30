@@ -51,7 +51,7 @@ async function runRadar(page, db, acc, randomSleep) {
                             account: acc.alias
                         });
                         
-                        // 记录有评论的视频索引，后续指引机甲点击
+                        // 记录有评论的视频索引，后续引导页面点击
                         if (v.comment_count > 0) {
                             clickIndices.push(index);
                         }
@@ -99,7 +99,7 @@ async function runRadar(page, db, acc, randomSleep) {
         }
     });
 
-    // ================= 沙盒物理操控逻辑 =================
+    // ================= 会话交互逻辑 =================
     await page.goto('https://creator.douyin.com/creator-micro/interactive/comment', { waitUntil: 'domcontentloaded', timeout: 30000 });
     
     // 等待网络数据捕获
@@ -231,7 +231,7 @@ async function runBatchPin(page, targetVideos, replyText, randomSleep) {
 // 3. 抖音：精准回复模块
 // =================================================================
 async function runReply(page, msg, replyText, randomSleep) {
-    console.log(`🚀 [降临引擎] 正在空降抖音评论大厅...`);
+    console.log(`🚀 [执行引擎] 正在导航至抖音评论大厅...`);
     await page.goto('https://creator.douyin.com/creator-micro/interactive/comment', { waitUntil: 'domcontentloaded' });
     
     await randomSleep(page, 2500, 3500);
@@ -243,7 +243,7 @@ async function runReply(page, msg, replyText, randomSleep) {
     const targetVideoTitle = videoTitleMatch ? videoTitleMatch[1].trim() : null;
 
     if (targetVideoTitle) {
-        console.log(`🎬 [机甲导航] 检测到所属视频，准备精准切换至: [${targetVideoTitle.substring(0, 10)}...]`);
+        console.log(`🎬 [页面导航] 检测到所属视频，准备精准切换至: [${targetVideoTitle.substring(0, 10)}...]`);
         try {
             const triggerClicked = await page.evaluate(() => {
                 const triggers = Array.from(document.querySelectorAll('*')).filter(el => 
@@ -278,15 +278,15 @@ async function runReply(page, msg, replyText, randomSleep) {
                 }, shortTitleForNav);
 
                 if (videoClicked) {
-                    console.log(`✅ [机甲导航] 成功选中对应视频！等待独立评论列表重载...`);
+                    console.log(`✅ [页面导航] 成功选中对应视频！等待独立评论列表重载...`);
                     await randomSleep(page, 2500, 3500); 
                 } else {
-                    console.log(`⚠️ [机甲导航] 下拉框已展开，但没找到视频: [${shortTitleForNav}]，将在默认列表硬搜。`);
+                    console.log(`⚠️ [页面导航] 下拉框已展开，但没找到视频: [${shortTitleForNav}]，将在默认列表硬搜。`);
                     await page.mouse.click(10, 10); 
                 }
             }
         } catch (e) {
-            console.log(`⚠️ [机甲导航] 切换视频发生错误:`, e.message);
+            console.log(`⚠️ [页面导航] 切换视频发生错误:`, e.message);
         }
     }
 
@@ -359,7 +359,7 @@ async function runReply(page, msg, replyText, randomSleep) {
                 const sendBtn = page.locator('button', { hasText: '发送' }).last();
                 if (await sendBtn.isVisible()) {
                     await sendBtn.click();
-                    console.log(`🔥 [降临引擎] 成功击发“发送”按钮！拦截网已全面贯穿！`);
+                    console.log(`🔥 [执行引擎] 成功触发”发送”按钮！已执行！`);
                 } else {
                     console.log(`⚠️ 未能在 DOM 中找到发送按钮，尝试使用硬回车 (Enter) 强行发送！`);
                     await page.keyboard.press('Enter');
@@ -371,7 +371,7 @@ async function runReply(page, msg, replyText, randomSleep) {
             console.log(`❌ 突破输入框结构时发生异常:`, e.message);
         }
         
-        console.log(`✅ [降临引擎] 自动化回复序列执行完毕！`);
+        console.log(`✅ [执行引擎] 自动化回复序列执行完毕！`);
         await randomSleep(page, 2000, 3000);
     } else {
         console.log(`⚠️ [视觉雷达] 滚动了20屏依然未找到目标评论。可能已被删除。`);

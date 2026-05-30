@@ -38,11 +38,11 @@ export async function ensureBrowserCore(mainWindow) {
     // 检查是否已经下载过了，避免重复下载
     const executablePath = getExecutablePath();
     if (fs.existsSync(executablePath)) {
-        console.log('✅ 底层装甲已存在，直接启动！');
+        console.log('✅ 底层环境已就绪，直接启动！');
         return executablePath;
     }
 
-    console.log('⚠️ 未检测到底层装甲，启动云端下发协议...');
+    console.log('⚠️ 未检测到运行环境，启动初始化协议...');
     const zipUrl = getSystemCoreUrl();
     const zipPath = path.join(app.getPath('userData'), 'core.zip');
 
@@ -71,7 +71,7 @@ export async function ensureBrowserCore(mainWindow) {
             if (mainWindow) {
                 mainWindow.webContents.send('core-download-progress', progress);
             }
-            console.log(`📥 装甲下发中: ${progress}%`);
+            console.log(`📥 环境初始化中: ${progress}%`);
         });
 
         writer.on('finish', async () => {
@@ -87,7 +87,7 @@ export async function ensureBrowserCore(mainWindow) {
                     fs.chmodSync(getExecutablePath(), '755');
                 }
                 
-                console.log('🎉 底层装甲部署彻底完成！');
+                console.log('🎉 运行环境初始化完成！');
                 if (mainWindow) mainWindow.webContents.send('core-download-status', '部署完成，系统启动！');
                 resolve(getExecutablePath());
             } catch (err) {

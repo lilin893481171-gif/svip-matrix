@@ -1,9 +1,15 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { 
-  Plus, Video, Trash2, Edit, Globe, Scissors, Wand2, Hash, AtSign, MapPin, 
+import {
+  Plus, Video, Trash2, Edit, Globe, Scissors, Wand2, Hash, AtSign, MapPin,
   ShoppingBag, Eye, Settings, ToggleRight, Bot, Shield, Rss, Smile, Link as LinkIcon,
-  FolderOpen, Activity, Loader2, Radio, MessageCircle
+  FolderOpen, Activity, Loader2, Radio, MessageCircle, CheckCircle2,
+  ChevronRight, Sparkles, RefreshCw,
 } from 'lucide-react';
+import MediaLibraryPanel from './MediaLibraryPanel';
+import AIFillPanel from './AIFillPanel';
+import XHSPublishMock from './XHSPublishMock';
+import { SYSTEM_MEDIA_FOLDER } from '../config/matrixConfig';
+import { useToast } from './ToastContext';
 
 const getElectron = () => {
   if (typeof window !== 'undefined' && window.electron) return window.electron;
@@ -60,31 +66,165 @@ const PlatformHeader = ({ platform }) => {
         <span className="font-black text-[18px] text-[#333] truncate">{platform}</span>
       </div>
       <div className="text-[12px] text-[#999] bg-[#f0f2f5] px-3 py-1.5 rounded-full font-bold flex items-center whitespace-nowrap flex-shrink-0">
-        <Shield size={14} className="mr-1.5 text-slate-400 flex-shrink-0"/> 
+        <Shield size={14} className="mr-1.5 text-slate-400 flex-shrink-0"/>
         当前配置将仅对「<span className="text-[#333] mx-1">{platform}</span>」生效
       </div>
     </div>
   );
 };
 
-// 🚨 接收了 setActiveTab，方便发完视频瞬间跳转接管中心
-export default function PublishTask({ accounts, videoList, setVideoList, activeVideoId, setActiveVideoId, publishHistory, setPublishHistory, setIsCopilotOpen, setActiveTab }) {
+// 🚨 接收了 setActiveTab，方便发完视频瞬间跳转发布队列
+export default function PublishTask({ accounts, videoList, setVideoList, activeVideoId, setActiveVideoId, publishHistory, setPublishHistory, setActiveTab, publishStep, setPublishStep, publishEditorTab, setPublishEditorTab, publishWorkbenchVideos, setPublishWorkbenchVideos, publishIsDryRun, setPublishIsDryRun }) {
   const electron = getElectron();
   const videoRef = useRef(null);
-  
-  const [isDryRun, setIsDryRun] = useState(true);
+  const { addToast } = useToast();
+
   const activeVideo = videoList.find(v => v.id === activeVideoId);
-  const [activeEditorTab, setActiveEditorTab] = useState('universal');
   const [syncTasks, setSyncTasks] = useState([]);
+
+  // ─── RPA 实时内嵌视图 ───
+  const rpaDockRef = useRef(null);
+  const [rpaViewActive, setRpaViewActive] = useState(false);
+  const [rpaActiveTaskId, setRpaActiveTaskId] = useState(null);
+  const activeRunningTask = syncTasks.find(t => t.status === '开始执行' || (t.status && t.status.includes('中') && t.status !== '排队中'));
+
+  // 自动吸附 BrowserView 到内嵌面板
+  useEffect(() => {
+    if (rpaViewActive && rpaDockRef.current && activeRunningTask) {
+      const updateBounds = () => {
+        const rect = rpaDockRef.current.getBoundingClientRect();
+        electron.ipcRenderer.send('attach-robot-view', {
+          taskId: activeRunningTask.historyId,
+          bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
+        });
+      };
+      setTimeout(updateBounds, 300);
+      window.addEventListener('resize', updateBounds);
+      return () => {
+        window.removeEventListener('resize', updateBounds);
+        electron.ipcRenderer.send('detach-robot-view');
+      };
+    }
+  }, [rpaViewActive, activeRunningTask?.historyId]);
+
+  // 当有任务开始执行时自动开启 RPA 视图
+  useEffect(() => {
+    if (activeRunningTask && !rpaViewActive) {
+      setRpaViewActive(true);
+      setRpaActiveTaskId(activeRunningTask.historyId);
+    }
+  }, [activeRunningTask?.historyId]);
+
+  // ─── 步骤系统（状态提升至 App.jsx，跨视图存活）───
+  const currentStep = publishStep;
+  const setCurrentStep = setPublishStep;
+  const activeEditorTab = publishEditorTab;
+  const setActiveEditorTab = setPublishEditorTab;
+  const workbenchVideos = publishWorkbenchVideos;
+  const setWorkbenchVideos = setPublishWorkbenchVideos;
+  const isDryRun = publishIsDryRun;
+  const setIsDryRun = setPublishIsDryRun;
+  const [mediaFolders, setMediaFolders] = useState(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('publish_user_media_folder') : null;
+    return { system: SYSTEM_MEDIA_FOLDER, user: saved || '' };
+  });
+
+  const handleAddToWorkbench = (selectedFiles) => {
+    setWorkbenchVideos(prev => {
+      const existingKeys = new Set(prev.map(v => `${v.name}|${v.size}`));
+      const newVids = selectedFiles.filter(f => !existingKeys.has(`${f.name}|${f.size}`));
+      return [...prev, ...newVids];
+    });
+    setCurrentStep(1);
+  };
+
+  const handleMapToPublish = (results) => {
+    const newVideos = results.map((r, i) => {
+      const id = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${i}`;
+      const video = r.video;
+      const universal = {
+        title: r.title,
+        desc: '',
+        tags: '',
+        category: '科技数码',
+        coverUrl: '',
+        coverPath: '',
+        firstComment: '',
+        original: true,
+        aigc: false,
+      };
+      const platforms = {};
+      if (r.aiResult?.platforms) {
+        for (const [pName, pData] of Object.entries(r.aiResult.platforms)) {
+          platforms[pName] = {
+            title: pData.title || r.title,
+            desc: pData.desc || '',
+            tags: Array.isArray(pData.tags) ? pData.tags.join(',') : (pData.tags || ''),
+            category: '科技数码',
+          };
+        }
+      }
+      return {
+        id,
+        path: video.path,
+        url: getSafeVideoSrc(video.path),
+        name: video.name,
+        status: '未配置',
+        config: { universal, platforms, targetAccounts: [], coverStatus: 'none' },
+      };
+    });
+
+    setVideoList(prev => [...prev, ...newVideos]);
+    if (newVideos.length > 0 && !activeVideoId) {
+      setActiveVideoId(newVideos[0].id);
+    }
+    setCurrentStep(2);
+  };
+
+  // 🚀 跳过 AI 填表：直接将视频数组映射到发布台（字段为空，用户手动填写）
+  const handleSkipToPublish = (videos) => {
+    if (!videos || videos.length === 0) return;
+    const newVideos = videos.map((video, i) => {
+      const id = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${i}`;
+      return {
+        id,
+        path: video.path,
+        url: getSafeVideoSrc(video.path),
+        name: video.name,
+        status: '未配置',
+        config: {
+          universal: {
+            title: video.name.replace(/\.[^/.]+$/, ''),
+            desc: '',
+            tags: '',
+            category: '科技数码',
+            coverUrl: '',
+            coverPath: '',
+            firstComment: '',
+            original: true,
+            aigc: false,
+          },
+          platforms: {},
+          targetAccounts: [],
+          coverStatus: 'none',
+        },
+      };
+    });
+    setVideoList(prev => [...prev, ...newVideos]);
+    if (newVideos.length > 0 && !activeVideoId) {
+      setActiveVideoId(newVideos[0].id);
+    }
+    setCurrentStep(2);
+  };
 
   const handlePublish = async (platformName) => {
     const activeVideo = videoList.find(v => v.id === activeVideoId);
-    if (!activeVideo) return alert("⚠️ [SYSTEM_ERROR] 未选择挂载载荷！");
+    if (!activeVideo) { addToast('error', '未选择挂载载荷', '请先在左侧列表中选取一个视频'); return; }
 
     const targetAccounts = activeVideo.config.targetAccounts || [];
     const matchedAccountStr = targetAccounts.find(accStr => accStr.includes(`|${platformName}|`));
     
-    if (!matchedAccountStr) return alert(`❌ [ABORT] 未向目标节点【${platformName}】分配账号！`);
+    if (!matchedAccountStr) { addToast('error', '未分配账号', `请为【${platformName}】指定目标账号`); return; }
 
     const [currentAccountId, _, accountAlias] = matchedAccountStr.split('|');
     const uConfig = activeVideo.config?.universal || {};
@@ -120,13 +260,13 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
     try {
       const res = await electron.ipcRenderer.invoke('execute-auto-publish', taskData);
       if (res.success) {
-         // 🚀 核心优化：一发车，立刻带你去接管中心看板！
+         // 🚀 核心优化：一开始，立刻带你去发布队列看板！
          setActiveTab('history'); 
       } else {
-         alert(`❌ [CRITICAL] 注入失败: ${res.message}`);
+         addToast('error', '注入失败', res.message);
       }
     } catch (error) {
-      alert("🚨 [CONNECTION_LOST] 与底层 RPA 引擎失联！");
+      addToast('error', 'RPA 引擎失联', '请检查底层浏览器运行状态');
     }
   };
 
@@ -164,34 +304,16 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
         }
         return prev;
       });
+
+      if (payload.status === '任务成功') {
+        addToast('success', '发布成功', payload.title || '未知视频');
+      } else if (payload.status === '任务失败') {
+        addToast('error', '发布失败', safeMsg);
+      }
     };
     if (electron.ipcRenderer.on) electron.ipcRenderer.on('task-progress-update', handleUpdate);
     return () => { if (electron.ipcRenderer.removeAllListeners) electron.ipcRenderer.removeAllListeners('task-progress-update'); };
   }, []);
-
-  const handleBatchImport = async () => {
-    try {
-      const res = await electron.ipcRenderer.invoke('select-local-videos');
-      if (res && res.success && res.paths) {
-        const newVideos = res.paths.map(absolutePath => {
-          const fileName = absolutePath.split(/[\\/]/).pop();
-          const nameWithoutExt = fileName.replace(/\.[^/.]+$/, "");
-          return {
-            id: `vid_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            path: absolutePath, url: getSafeVideoSrc(absolutePath), name: fileName, status: '未配置',
-            config: {
-              universal: { title: nameWithoutExt, desc: '', tags: '', category: '科技数码', coverUrl: '', coverPath: '', firstComment: '', original: true, aigc: false },
-              platforms: {}, 
-              targetAccounts: [], 
-              coverStatus: 'none'
-            }
-          };
-        });
-        setVideoList(prev => [...prev, ...newVideos]);
-        if (!activeVideoId && newVideos.length > 0) setActiveVideoId(newVideos[0].id);
-      }
-    } catch (e) { console.error(e); }
-  };
 
   const handleRemoveVideo = (e, videoId, videoName) => {
     e.stopPropagation();
@@ -223,23 +345,23 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
   const captureCurrentFrame = async () => {
     if (!videoRef.current || !activeVideo) return;
     const video = videoRef.current;
-    
+
     if (video.readyState === 0) {
-      alert('请先等待视频加载完成，或点击播放缓冲一下！');
+      addToast('warning', '视频未就绪', '请等待视频加载完成后再截帧');
       return;
     }
 
     try {
       updateRootConfig('coverStatus', 'extracting');
       const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 720; 
+      canvas.width = video.videoWidth || 720;
       canvas.height = video.videoHeight || 1280;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const base64Cover = canvas.toDataURL('image/jpeg', 0.85);
-      
+
       updateConfig('universal', 'coverUrl', base64Cover);
-      
+
       const saveRes = await electron.ipcRenderer.invoke('save-temp-cover', base64Cover);
       if (saveRes.success) {
         updateConfig('universal', 'coverPath', saveRes.path);
@@ -249,7 +371,7 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       }
     } catch (err) {
       console.error(err);
-      alert('截帧失败！请确保视频格式正确。');
+      addToast('error', '截帧失败', '请确保视频格式正确');
       updateRootConfig('coverStatus', 'none');
     }
   };
@@ -263,13 +385,13 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
 
   const handleSaveToLocalDraft = () => {
     if (!activeVideo) return;
-    if (activeVideo.config.targetAccounts.length === 0) return alert("该视频尚未勾选任何目标发布平台！");
+    if (activeVideo.config.targetAccounts.length === 0) { addToast('warning', '未选择目标平台', '请先勾选至少一个发布平台'); return; }
     setVideoList(prev => prev.map(v => v.id === activeVideoId ? { ...v, status: '已就绪' } : v));
   };
 
   const launchAllQueue = async () => {
     const readyQueue = videoList.filter(v => v.status === '已就绪');
-    if (readyQueue.length === 0) return alert("⚠️ 序列为空！请先将载荷存为 [已就绪] 状态！");
+    if (readyQueue.length === 0) { addToast('warning', '序列为空', '请先将视频存为 [已就绪] 状态'); return; }
     
     const confirmMsg = isDryRun 
       ? `🛡️ [SIMULATION_MODE]\n侦测到 ${readyQueue.length} 个待发载荷。\n引擎将仅执行渗透与填表，最后一步会被防火墙拦截。`
@@ -370,10 +492,6 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
             <div>
               <label className="text-[10px] font-bold text-slate-500 uppercase mb-2 flex items-center justify-between">
                 <span>通用视频描述 / 简介 (Description)</span>
-                <button onClick={() => setIsCopilotOpen(true)} className="text-[10px] bg-gradient-to-r from-red-50 to-rose-50 text-red-600 border border-red-200 px-2.5 py-1 rounded-full flex items-center hover:shadow-md hover:border-red-300 transition cursor-pointer group">
-                  <Wand2 size={12} className="mr-1 text-red-500 group-hover:rotate-12 transition-transform"/> 
-                  <span className="font-bold">✨ AI 爆款文案生成</span>
-                </button>
               </label>
               <textarea className="w-full border border-slate-200 rounded-xl p-3 text-sm outline-none focus:border-indigo-500 resize-none h-24 shadow-inner bg-slate-50" placeholder="填写介绍，机器臂发文时会自动在末尾拼接话题标签..." value={uConfig.desc} onChange={e=>updateConfig('universal', 'desc', e.target.value)} />
             </div>
@@ -405,9 +523,6 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
             <div className="bg-white rounded-lg p-6 sm:p-8 shadow-sm">
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-[16px] font-bold text-[#161823]">基础信息</h2>
-                <button onClick={() => setIsCopilotOpen(true)} className="bg-[#f4f5f6] text-[#161823] text-[13px] px-4 py-1.5 rounded-full hover:bg-[#e8e8e8] font-bold flex items-center transition">
-                  <Wand2 size={14} className="mr-1.5 text-[#fe2c55]"/> AI 快速填写
-                </button>
               </div>
 
               <div className="space-y-6">
@@ -526,65 +641,16 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       );
     }
 
-    // ==================== 🔥 2. 小红书（全新SOP版） ====================
+    // ==================== 🔥 2. 小红书（沉浸式原生编辑器） ====================
     if (activeEditorTab === '小红书') {
+      const xhsConfig = { ...uConfig, ...pConfig };
       return (
-        <div className="bg-[#f5f6f7] min-h-full animate-in fade-in duration-300 py-6 pb-32 font-sans px-4 sm:px-8">
-          <div className="max-w-[840px] w-full mx-auto space-y-5">
-            <PlatformHeader platform={activeEditorTab} />
-
-            {/* 封面卡片 */}
-            <div className="bg-white rounded-2xl p-6 shadow-sm border border-[#e3e4e5]">
-              <div className="text-[16px] font-bold text-[#333] mb-1">设置封面</div>
-              <div className="text-[13px] text-[#999] mb-4">默认截取第一帧作为封面</div>
-              <div className="w-[160px] aspect-[3/4] bg-slate-900 rounded-xl overflow-hidden relative border border-[#e5e5e5] shadow-sm cursor-pointer group">
-                {activeVideo.config.universal.coverUrl ? (
-                  <img src={activeVideo.config.universal.coverUrl} className="w-full h-full object-cover" alt="封面" />
-                ) : (
-                  <div className="absolute inset-0 flex items-center justify-center text-white"><Video size={24}/></div>
-                )}
-                <div className="absolute bottom-2 left-2 bg-black/50 text-white text-[11px] px-1.5 py-0.5 rounded">当前封面</div>
-              </div>
-            </div>
-
-            {/* 标题 + 描述 + 话题胶囊 */}
-            <div className="bg-white rounded-2xl p-0 shadow-sm border border-[#e3e4e5] overflow-hidden">
-              <div className="p-6 pb-2 border-b border-[#f5f5f5] relative">
-                <input className="w-full text-[16px] text-[#333] font-bold outline-none placeholder-[#ccc] bg-transparent pr-24" placeholder="填写标题会有更多赞哦" value={pConfig.title ?? uConfig.title} onChange={e => updateConfig('小红书', 'title', e.target.value)} />
-              </div>
-              <div className="p-6 pt-4 relative">
-                <textarea className="w-full h-32 text-[14px] text-[#333] outline-none resize-none placeholder-[#ccc] bg-transparent leading-relaxed" placeholder="输入正文描述" value={pConfig.desc ?? uConfig.desc} onChange={e => updateConfig('小红书', 'desc', e.target.value)} />
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {['#解压玩具', '#龙珠灯'].map(tag => (
-                    <span key={tag} className="bg-[#f5f5f5] text-[#666] px-3 py-1.5 rounded-full cursor-pointer hover:text-[#333] hover:bg-[#eee]">{tag}</span>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* 地点 + 定时 + 原创 */}
-            <div className="bg-white rounded-2xl p-6 shadow-sm border border-[#f0f0f0]">
-              <div className="flex items-center justify-between py-3 border-b">
-                <div className="text-[14px] text-[#333]">添加地点</div>
-                <input className="flex-1 mx-4 border border-[#e3e4e5] rounded p-3 text-sm" placeholder="搜索地点" value={pConfig.poi || ''} onChange={e => updateConfig('小红书', 'poi', e.target.value)} />
-              </div>
-              <div className="flex justify-between items-center py-4">
-                <div className="text-[14px] text-[#333]">定时发布</div>
-                <ToggleRight size={32} className={pConfig.scheduled ? "text-[#ff2442]" : "text-[#e5e5e5]"} onClick={()=>updateConfig('小红书', 'scheduled', !pConfig.scheduled)} />
-              </div>
-              {pConfig.scheduled && <input type="datetime-local" className="w-full border border-[#e3e4e5] rounded p-3" value={pConfig.scheduleTime || ''} onChange={e=>updateConfig('小红书', 'scheduleTime', e.target.value)} />}
-              <div className="flex justify-between items-center py-4 border-t">
-                <div className="text-[14px] text-[#333]">原创声明</div>
-                <ToggleRight size={32} className={(pConfig.isOriginal ?? uConfig.original) ? "text-[#ff2442]" : "text-[#e5e5e5]"} onClick={()=>updateConfig('小红书', 'isOriginal', !(pConfig.isOriginal ?? uConfig.original))} />
-              </div>
-            </div>
-
-            <div className="pt-6 pb-8 flex justify-center gap-4 border-t border-[#e3e4e5] mt-6">
-              <button className="px-10 py-2.5 bg-white border border-[#e3e4e5] text-[#333] rounded-xl text-[14px] font-bold hover:bg-[#f9f9f9] transition shadow-sm">暂存草稿</button>
-              <button onClick={() => handlePublish('小红书')} className="px-12 py-2.5 bg-[#ff2442] text-white rounded-xl shadow-md text-[14px] font-bold hover:bg-[#e61e38] transition active:scale-95">发布至小红书</button>
-            </div>
-          </div>
-        </div>
+        <XHSPublishMock
+          config={xhsConfig}
+          onChange={(field, value) => updateConfig('小红书', field, value)}
+          onPublish={() => handlePublish('小红书')}
+          onSaveDraft={() => console.log('[小红书] 暂存草稿', xhsConfig)}
+        />
       );
     }
 
@@ -597,22 +663,6 @@ if (activeEditorTab === '快手') {
 
         <div className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-[#e3e4e5] space-y-8">
           
-          {/* 封面设置（保持原样） */}
-          <div className="flex items-start">
-            <div className="w-[100px] text-[14px] text-[#666] flex items-center">
-              封面设置 <span className="text-[#ccc] ml-1 text-[11px] border border-[#ccc] rounded-full w-3.5 h-3.5 flex items-center justify-center cursor-help">?</span>
-            </div>
-            <div className="flex-1 flex gap-6">
-              <div className="w-[140px] aspect-[3/4] bg-slate-900 rounded-md border border-[#eee] overflow-hidden flex items-center justify-center relative cursor-pointer shadow-sm">
-                {activeVideo.config.universal.coverUrl ? (
-                  <img src={activeVideo.config.universal.coverUrl} className="w-full h-full object-cover" alt="封面" />
-                ) : (
-                  <span className="text-white text-[12px] absolute bottom-2 left-2 bg-black/50 px-1.5 rounded">当前封面</span>
-                )}
-              </div>
-            </div>
-          </div>
-
           {/* 作品描述 */}
           <div className="flex items-start">
             <div className="w-[100px] text-[14px] text-[#666] mt-2">作品描述</div>
@@ -796,9 +846,6 @@ if (activeEditorTab === 'B站') {
                 onChange={e => updateConfig('B站', 'title', e.target.value)}
                 placeholder="请输入标题"
               />
-              <button onClick={() => setIsCopilotOpen(true)} className="text-[12px] bg-[#00aeec]/10 text-[#00aeec] px-4 py-2 rounded flex items-center hover:bg-[#00aeec]/20 transition font-bold whitespace-nowrap">
-                <Wand2 size={14} className="mr-1"/> AI 优化
-              </button>
             </div>
           </div>
 
@@ -949,20 +996,7 @@ if (activeEditorTab === '微信视频号') {
               基础信息
             </h3>
 
-            {/* 封面预览：标签宽度从 130px 缩至 90px，封面尺寸缩小 */}
-            <div className="flex items-start gap-4 mb-6">
-              <div className="w-[90px] text-[#666] text-[13px] font-bold flex-shrink-0 mt-1">封面预览</div>
-              <div className="relative w-[80px] aspect-[3/4] bg-slate-900 rounded-xl overflow-hidden cursor-pointer group shadow-sm border border-slate-200 flex-shrink-0">
-                {activeVideo.config.universal.coverUrl ? (
-                  <img src={activeVideo.config.universal.coverUrl} className="w-full h-full object-cover" alt="封面" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs text-center px-2">封面</div>
-                )}
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-xs font-bold transition">更换</div>
-              </div>
-            </div>
-
-            {/* 短标题 + 视频描述：间距缩小 */}
+            {/* 短标题 + 视频描述 */}
             <div className="space-y-4">
               <div className="flex items-center gap-4">
                 <div className="w-[90px] text-[#666] text-[13px] font-bold flex-shrink-0">短标题</div>
@@ -1100,16 +1134,6 @@ if (activeEditorTab === '微信视频号') {
           <div className="max-w-[840px] w-full mx-auto space-y-5">
             <PlatformHeader platform={activeEditorTab} />
 
-            <div className="bg-white p-6 rounded-xl border border-[#e3e4e5] shadow-sm">
-              <div className="text-[14px] font-bold text-[#333] mb-4 flex items-center"><Globe size={16} className="mr-2 text-[#2b88ff]"/> 视频封面设置</div>
-              <div className="flex gap-4">
-                <div className="w-40 aspect-video bg-slate-50 rounded-lg border-2 border-dashed border-[#d1d5db] flex flex-col items-center justify-center text-[#999] hover:border-[#2b88ff] cursor-pointer group">
-                  <Plus size={24} className="group-hover:scale-110 transition-transform" />
-                  <span className="text-[11px] mt-2 font-bold">自定义上传</span>
-                </div>
-              </div>
-            </div>
-
             <div className="bg-white p-6 rounded-xl border border-[#e3e4e5] shadow-sm space-y-5">
               <div>
                 <div className="flex justify-between mb-2"><span className="text-[14px] font-bold text-[#333]">文章标题</span><span className="text-[11px] font-mono text-[#999] bg-slate-100 px-2 py-0.5 rounded">{(pConfig.title ?? uConfig.title)?.length || 0}/50</span></div>
@@ -1118,7 +1142,6 @@ if (activeEditorTab === '微信视频号') {
 
               <div className="flex flex-wrap gap-3">
                 <button className="px-4 py-2 bg-slate-50 text-[#666] text-[13px] font-bold rounded-lg border border-slate-200 hover:border-[#2b88ff] hover:text-[#2b88ff] transition-all flex items-center"><Hash size={14} className="mr-1.5"/> 插入话题</button>
-                <button onClick={() => setIsCopilotOpen(true)} className="px-4 py-2 bg-[#2b88ff]/5 text-[#2b88ff] text-[13px] font-bold rounded-lg border border-[#2b88ff]/20 hover:bg-[#2b88ff]/10 transition-all flex items-center sm:ml-auto"><Wand2 size={14} className="mr-1.5"/> AI 润色标题</button>
               </div>
             </div>
 
@@ -1154,7 +1177,6 @@ if (activeEditorTab === '微信视频号') {
               <div>
                 <div className="flex justify-between items-center mb-3">
                   <label className="block text-[15px] font-bold text-[#121212]">专属视频简介</label>
-                  <button onClick={() => setIsCopilotOpen(true)} className="text-[13px] bg-[#0066ff]/10 text-[#0066ff] px-3 py-1.5 rounded-md font-bold flex items-center hover:bg-[#0066ff]/20 transition"><Wand2 size={14} className="mr-1"/> AI 优化</button>
                 </div>
                 <textarea className="w-full border border-[#ebebeb] rounded-lg p-3.5 text-[15px] outline-none focus:border-[#0066ff] h-32 resize-none bg-[#fbfbfb]" value={pConfig.desc ?? uConfig.desc} onChange={e=>updateConfig('知乎', 'desc', e.target.value)} />
               </div>
@@ -1188,7 +1210,6 @@ if (activeEditorTab === '微信视频号') {
               <div>
                 <div className="flex justify-between items-center mb-3">
                   <label className="block text-[14px] font-bold text-[#333]">微博文案 (视频将作为附件)</label>
-                  <button onClick={() => setIsCopilotOpen(true)} className="text-[13px] font-bold bg-[#ff8200]/10 text-[#ff8200] px-3 py-1.5 rounded-md flex items-center hover:bg-[#ff8200]/20 transition"><Wand2 size={14} className="mr-1"/> AI 优化</button>
                 </div>
                 <textarea className="w-full border border-[#cccccc] rounded-lg p-3.5 text-[14px] outline-none focus:border-[#ff8200] h-36 resize-none bg-[#fcfcfc]" placeholder="有什么新鲜事想分享给大家？" value={pConfig.desc ?? uConfig.desc} onChange={e=>updateConfig('微博', 'desc', e.target.value)} />
                 <div className="flex gap-4 mt-3">
@@ -1228,7 +1249,6 @@ if (activeEditorTab === '微信视频号') {
               <div>
                 <div className="flex justify-between items-center mb-3">
                   <label className="block text-[14px] text-[#000] font-bold">专属简介</label>
-                  <button onClick={() => setIsCopilotOpen(true)} className="text-[13px] font-bold bg-[#00A4FF]/10 text-[#00A4FF] px-3 py-1.5 rounded-md flex items-center hover:bg-[#00A4FF]/20 transition"><Wand2 size={14} className="mr-1"/> AI 优化</button>
                 </div>
                 <textarea className="w-full border border-[#e3e4e5] p-3.5 rounded-lg text-[14px] outline-none focus:border-[#00A4FF] h-28 resize-none bg-[#fcfcfc]" value={pConfig.desc ?? uConfig.desc} onChange={e=>updateConfig(activeEditorTab, 'desc', e.target.value)} />
               </div>
@@ -1286,7 +1306,6 @@ if (activeEditorTab === '微信视频号') {
               <div>
                 <div className="flex justify-between items-center mb-3">
                   <label className="block text-[14px] font-bold text-[#333]">专属简介</label>
-                  <button onClick={() => setIsCopilotOpen(true)} className="text-[13px] font-bold bg-[#FF6600]/10 text-[#FF6600] px-3 py-1.5 rounded-md flex items-center hover:bg-[#FF6600]/20 transition"><Wand2 size={14} className="mr-1"/> AI 优化</button>
                 </div>
                 <textarea className="w-full border border-[#e3e4e5] p-3.5 rounded-lg text-[14px] outline-none focus:border-[#FF6600] h-28 resize-none bg-[#fcfcfc]" value={pConfig.desc ?? uConfig.desc} onChange={e=>updateConfig('大鱼号(优酷)', 'desc', e.target.value)} />
               </div>
@@ -1330,7 +1349,6 @@ if (activeEditorTab === '微信视频号') {
               <div>
                 <div className="flex justify-between items-center mb-3">
                   <label className="block text-[14px] font-bold text-[#333]">专属简介</label>
-                  <button onClick={() => setIsCopilotOpen(true)} className="text-[13px] font-bold bg-emerald-600/10 text-emerald-600 px-3 py-1.5 rounded-md flex items-center hover:bg-emerald-600/20 transition"><Wand2 size={14} className="mr-1"/> AI 优化</button>
                 </div>
                 <textarea className="w-full border border-[#e3e4e5] rounded-lg p-3.5 text-[14px] outline-none focus:border-emerald-600 h-36 resize-none bg-[#fcfcfc]" value={pConfig.desc ?? uConfig.desc} onChange={e=>updateConfig('爱奇艺号', 'desc', e.target.value)} />
               </div>
@@ -1349,13 +1367,61 @@ if (activeEditorTab === '微信视频号') {
   }; // 🚨 核心修复：这个大括号在这里收尾！
 
 return (
-    <div className="flex h-[calc(100vh-8rem)] gap-4 animate-in fade-in duration-500 pb-2">
+    <div className="flex flex-col h-[calc(100vh-8rem)] animate-in fade-in duration-500 overflow-hidden">
+      {/* ─── 步骤指示器 ─── */}
+      <div className="flex items-center justify-center gap-1 px-6 pt-4 pb-3 flex-shrink-0">
+        {['媒体库', 'AI 填表', '审核发布'].map((label, i) => {
+          const isActive = currentStep === i;
+          const isDone = currentStep > i;
+          return (
+            <React.Fragment key={i}>
+              {i > 0 && (
+                <div className={`w-8 h-0.5 rounded-full ${isDone ? 'bg-purple-500' : 'bg-zinc-300'}`} />
+              )}
+              <button
+                onClick={() => setCurrentStep(i)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-black transition-all ${isActive ? 'bg-purple-600 text-white shadow-md' : isDone ? 'bg-purple-100 text-purple-600' : 'bg-zinc-200 text-zinc-500 hover:bg-zinc-300'}`}
+              >
+                <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${isActive ? 'bg-white text-purple-600' : isDone ? 'bg-purple-500 text-white' : 'bg-zinc-400 text-white'}`}>
+                  {isDone ? <CheckCircle2 size={12} /> : i + 1}
+                </span>
+                {label}
+              </button>
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      {/* ─── 步骤 0: 媒体库 ─── */}
+      {currentStep === 0 && (
+        <MediaLibraryPanel
+          mediaFolders={mediaFolders}
+          setMediaFolders={setMediaFolders}
+          onAddToWorkbench={handleAddToWorkbench}
+          onSkipToPublish={(files) => handleSkipToPublish(files)}
+        />
+      )}
+
+      {/* ─── 步骤 1: AI 填表 ─── */}
+      {currentStep === 1 && (
+        <AIFillPanel
+          workbenchVideos={workbenchVideos}
+          setWorkbenchVideos={setWorkbenchVideos}
+          onMapToPublish={handleMapToPublish}
+          onBack={() => setCurrentStep(0)}
+          onSkip={() => handleSkipToPublish(workbenchVideos)}
+        />
+      )}
+
+      {/* ─── 步骤 2: 审核发布 (原有三栏布局) ─── */}
+      {currentStep === 2 && (
+      <div className="flex gap-4 pb-2 flex-1 overflow-hidden px-4">
       {/* 左侧：批量待发素材列队区 */}
       <div className="w-[260px] bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col flex-shrink-0">
-        <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col items-center">
-          <button onClick={handleBatchImport} className="w-full bg-slate-900 text-white border border-slate-800 hover:bg-slate-800 font-bold py-3 rounded-xl shadow-sm transition active:scale-95 flex items-center justify-center">
-            <Plus size={18} className="mr-1" /> 批量导入视频
-          </button>
+        <div className="p-4 border-b border-slate-100 bg-slate-50">
+          <div className="text-xs font-black text-slate-500 uppercase tracking-wider text-center">
+            待发队列 ({videoList.length})
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
           {videoList.length === 0 ? (
@@ -1393,7 +1459,7 @@ return (
             <p className="font-bold text-slate-400">请在左侧导入或点选视频</p>
           </div>
         ) : (
-          <>
+            <>
             <div className="p-3 border-b border-slate-100 bg-slate-50 flex justify-center items-center gap-6 shadow-inner relative overflow-hidden flex-shrink-0">
               <div className="flex flex-col items-center">
                 <div className="w-[140px] h-[240px] bg-black rounded-xl overflow-hidden border-[4px] border-slate-700 relative shadow-2xl">
@@ -1413,7 +1479,6 @@ return (
                 </div>
               </div>
             </div>
-
             <div className="flex flex-1 overflow-hidden">
               <div className="w-[72px] bg-slate-50 border-r border-slate-200 flex flex-col items-center flex-shrink-0 overflow-y-auto py-4 gap-4 shadow-[2px_0_10px_rgba(0,0,0,0.02)]">
                 <button 
@@ -1463,7 +1528,34 @@ return (
                 {renderPlatformEditor()}
               </div>
             </div>
-          </>
+            </>
+        )}
+
+        {/* ─── RPA 实时内嵌视图 ─── */}
+        {rpaViewActive && activeRunningTask && (
+          <div className="border-t border-slate-200 bg-slate-950 flex flex-col overflow-hidden" style={{ height: '280px' }}>
+            <div className="h-10 bg-slate-900 text-white flex items-center justify-between px-3 flex-shrink-0 border-b border-slate-800">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_rgba(52,211,153,0.6)] flex-shrink-0"></div>
+                <span className="text-xs font-bold text-emerald-400 truncate">🤖 RPA 实时操作 · {activeRunningTask.platform || ''}</span>
+                <span className="text-[10px] text-slate-500 truncate hidden sm:inline">{activeRunningTask.status}</span>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={() => setRpaViewActive(false)}
+                  className="text-[10px] px-2 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition"
+                >
+                  隐藏
+                </button>
+              </div>
+            </div>
+            <div ref={rpaDockRef} className="flex-1 bg-slate-800 w-full h-full relative">
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-600">
+                <RefreshCw size={32} className="animate-spin mb-3 opacity-40" />
+                <p className="text-xs">BrowserView 画面吸附中...</p>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 
@@ -1523,7 +1615,7 @@ return (
           <div className="p-3 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4">
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${isDryRun ? 'bg-amber-500 animate-pulse shadow-[0_0_8px_rgba(245,158,11,0.6)]' : 'bg-slate-600'}`}></div>
-              <span className={`text-[12px] font-black tracking-wider ${isDryRun ? 'text-amber-500' : 'text-slate-500'}`}>🛡️ DRY-RUN 演习安全栓</span>
+              <span className={`text-[12px] font-black tracking-wider ${isDryRun ? 'text-amber-500' : 'text-slate-500'}`}>🛡️ 预览模式安全栓</span>
             </div>
             <label className="relative inline-flex items-center cursor-pointer">
               <input type="checkbox" className="sr-only peer" checked={isDryRun} onChange={(e) => setIsDryRun(e.target.checked)} />
@@ -1535,7 +1627,7 @@ return (
             <div className={`absolute inset-0 transition-colors ${isDryRun ? 'bg-amber-900/20 group-hover:bg-amber-900/40' : 'bg-indigo-600/20 group-hover:bg-indigo-600/40'}`}></div>
             <Activity size={24} className={`mb-1 animate-pulse ${isDryRun ? 'text-amber-500' : 'text-indigo-500'}`} />
             <h2 className={`font-black text-lg tracking-widest relative z-10 drop-shadow-md ${isDryRun ? 'text-amber-400' : 'text-white'}`}>
-              {isDryRun ? '🛡️ 启动全队列演习' : '🚀 启动全队列发射'}
+              {isDryRun ? '🛡️ 启动全队列预览' : '🚀 启动全队列发布'}
             </h2>
           </div>
           
@@ -1558,6 +1650,8 @@ return (
           </div>
         </div>
       </div>
+    </div>
+      )}
     </div>
   );
 }

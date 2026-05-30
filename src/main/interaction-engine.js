@@ -30,7 +30,7 @@ async function loadEngine(platform) {
         throw new Error(`[${platform}] 引擎加载失败！请检查文件是否存在及代码语法。\n详细报错: ${e.message}`);
     }
 }
-// 通用休眠与沙盒管理
+// 通用休眠与会话管理
 const randomSleep = async (page, min = 1000, max = 2500) => {
   const delay = Math.floor(Math.random() * (max - min + 1)) + min;
   await page.waitForTimeout(delay);
@@ -93,7 +93,7 @@ export function registerInteractionEngineIPC() {
             }
         }
         
-        // 🌟 核心修复：执行完雷达扫描后，必须关闭沙盒！
+        // 🌟 核心修复：执行完雷达扫描后，必须关闭会话容器！
         await closeSandbox(acc.id);
         
         // 最后把结果返回给前端
@@ -105,8 +105,8 @@ export function registerInteractionEngineIPC() {
     }
   });
 
-  // 接口 3: 降临回复引擎 (智能路由分发)
-  ipcMain.handle('open-reply-sandbox', async (event, payload) => {
+  // 接口 3: 回复引擎 (智能路由分发)
+  ipcMain.handle('open-reply-session', async (event, payload) => {
     let accIdForClose = null;
     let browserOpened = false;
 
@@ -131,11 +131,11 @@ export function registerInteractionEngineIPC() {
           // 1. 动态加载引擎
           const engine = await loadEngine(platform);
 
-          // 2. 唤起沙盒
+          // 2. 启动隔离会话
           const browserSession = await launchSandbox(acc.id, { headless: false });
           browserOpened = true;
 
-          // 3. 击发
+          // 3. 执行
           const result = await engine.runBatchPin(browserSession.page, targetVideos, replyText, randomSleep);
           await closeSandbox(acc.id);
           return result;
@@ -149,18 +149,18 @@ export function registerInteractionEngineIPC() {
       // 1. 动态加载引擎
       const engine = await loadEngine(msg.platform);
 
-      // 2. 唤起沙盒
+      // 2. 启动隔离会话
       const browserSession = await launchSandbox(acc.id, { headless: false });
       browserOpened = true;
 
-      // 3. 击发
+      // 3. 执行
       await engine.runReply(browserSession.page, msg, replyText, randomSleep);
 
       db.prepare('UPDATE messages SET status = ?, reply_content = ? WHERE id = ?')
-        .run('已回复', replyText ? '[沙盒全自动] ' + replyText : '[沙盒手动]', messageId);
+        .run('已回复', replyText ? '[自动] ' + replyText : '[手动]', messageId);
 
       await closeSandbox(acc.id);
-      return { success: true, message: '沙盒执行完毕！' };
+      return { success: true, message: '会话执行完毕！' };
 
     } catch (error) {
       if (browserOpened && accIdForClose) await closeSandbox(accIdForClose);

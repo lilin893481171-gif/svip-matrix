@@ -1,10 +1,10 @@
 {
-  "name": "my-app",
-  "version": "1.0.0",
+  "name": "yumatrix-studio",
+  "version": "2.0.0",
   "type": "module",
-  "description": "An Electron application with React",
+  "description": "YuMatrix Studio — 多平台内容矩阵管理工作室",
   "main": "./out/main/index.js",
-  "author": "example.com",
+  "author": "YuMatrix",
   "homepage": "https://electron-vite.org",
   "scripts": {
     "format": "prettier --write .",

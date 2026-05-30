@@ -1,18 +1,19 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, Users, Trash2, ChevronRight, X, Lock, Edit, ChevronDown, GripVertical, FolderPlus, Shield, Chrome, Loader2, ExternalLink, Globe, ShieldAlert, Activity } from 'lucide-react';
+import { Plus, Users, Trash2, ChevronRight, X, Lock, Edit, ChevronDown, GripVertical, FolderPlus, Shield, Chrome, Loader2, ExternalLink, Globe, ShieldAlert, Activity, ChevronLeft, RotateCw } from 'lucide-react';
 
 const getElectron = () => {
   if (typeof window !== 'undefined' && window.electron) return window.electron;
   return {
     ipcRenderer: {
       invoke: async () => ({ success: false, message: '非原生环境' }),
+      send: () => {},
       on: () => {},
       removeAllListeners: () => {}
     }
   };
 };
 
-export default function AccountManagerView({ accounts, setAccounts }) {
+export default function AccountManagerView({ accounts, setAccounts, browserTabs, setBrowserTabs, activeTabId, setActiveTabId }) {
   const [showModal, setShowModal] = useState(false);
   const [modalStep, setModalStep] = useState(1);
   const [loginMethod, setLoginMethod] = useState('scan'); 
@@ -39,6 +40,113 @@ export default function AccountManagerView({ accounts, setAccounts }) {
   
   const [sniffingStatus, setSniffingStatus] = useState({});
   const queuedAccounts = useRef(new Set());
+
+  // ─── 多标签页内嵌浏览器（状态提升至 App.jsx，跨视图存活）───
+  const [addressInput, setAddressInput] = useState('');
+  const sessionPanelRef = useRef(null);
+
+  // 当前活跃标签的 URL
+  const activeTab = browserTabs.find(t => String(t.accountId) === String(activeTabId));
+  const activeTabUrl = activeTab?.url || '';
+
+  // 同步地址栏输入框与当前标签 URL
+  useEffect(() => {
+    if (activeTabId !== null) {
+      setAddressInput(activeTabUrl);
+    }
+  }, [activeTabId, activeTabUrl]);
+
+  // 导航操作
+  const handleNavigate = (url) => {
+    if (!activeTabId) return;
+    let finalUrl = url.trim();
+    if (!finalUrl) return;
+    if (!/^https?:\/\//i.test(finalUrl) && !finalUrl.startsWith('about:') && !finalUrl.startsWith('file:')) {
+      finalUrl = 'https://' + finalUrl;
+    }
+    setAddressInput(finalUrl);
+    electron.ipcRenderer.invoke('navigate-account-browser', { accountId: String(activeTabId), url: finalUrl });
+  };
+
+  const handleBack = () => {
+    if (!activeTabId) return;
+    electron.ipcRenderer.send('account-browser-go-back', { accountId: String(activeTabId) });
+  };
+
+  const handleForward = () => {
+    if (!activeTabId) return;
+    electron.ipcRenderer.send('account-browser-go-forward', { accountId: String(activeTabId) });
+  };
+
+  const handleRefresh = () => {
+    if (!activeTabId) return;
+    electron.ipcRenderer.send('account-browser-reload', { accountId: String(activeTabId) });
+  };
+
+  // 标签切换时自动吸附/分离 BrowserView
+  useEffect(() => {
+    if (activeTabId !== null && sessionPanelRef.current) {
+      const updateBounds = () => {
+        if (!sessionPanelRef.current) return;
+        const rect = sessionPanelRef.current.getBoundingClientRect();
+        electron.ipcRenderer.send('attach-account-browser', {
+          accountId: String(activeTabId),
+          bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
+        });
+      };
+      setTimeout(updateBounds, 300);
+      window.addEventListener('resize', updateBounds);
+      // ResizeObserver 监听容器尺寸变化（侧边栏折叠/展开时触发）
+      const ro = new ResizeObserver(() => updateBounds());
+      ro.observe(sessionPanelRef.current);
+      return () => {
+        window.removeEventListener('resize', updateBounds);
+        ro.disconnect();
+        electron.ipcRenderer.send('detach-account-browser', { accountId: String(activeTabId) });
+      };
+    }
+  }, [activeTabId]);
+
+  // 弹窗/模态层打开时，隐藏 BrowserView 防止遮挡（BrowserView 原生层不受 CSS z-index 控制）
+  const isAnyModalOpen = showModal || showGroupModal;
+  useEffect(() => {
+    if (activeTabId === null) return;
+    if (isAnyModalOpen) {
+      electron.ipcRenderer.send('detach-account-browser', { accountId: String(activeTabId) });
+    } else {
+      const timer = setTimeout(() => {
+        if (sessionPanelRef.current && !showModal && !showGroupModal) {
+          const rect = sessionPanelRef.current.getBoundingClientRect();
+          electron.ipcRenderer.send('attach-account-browser', {
+            accountId: String(activeTabId),
+            bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
+          });
+        }
+      }, 150); // 等弹窗关闭动画完成
+      return () => clearTimeout(timer);
+    }
+  }, [isAnyModalOpen]);
+
+  // 关闭一个标签页
+  const handleCloseTab = async (accountId) => {
+    const idStr = String(accountId);
+    electron.ipcRenderer.send('detach-account-browser', { accountId: idStr });
+    await electron.ipcRenderer.invoke('close-account-session', { accountId: idStr });
+    const newTabs = browserTabs.filter(t => String(t.accountId) !== idStr);
+    setBrowserTabs(newTabs);
+    if (String(activeTabId) === idStr) {
+      setActiveTabId(newTabs.length > 0 ? newTabs[newTabs.length - 1].accountId : null);
+    }
+  };
+
+  // 切换到指定标签
+  const switchToTab = (accountId) => {
+    if (String(activeTabId) === String(accountId)) return;
+    if (activeTabId !== null) {
+      electron.ipcRenderer.send('detach-account-browser', { accountId: String(activeTabId) });
+    }
+    setActiveTabId(accountId);
+  };
 
   const electron = getElectron();
 
@@ -146,20 +254,43 @@ export default function AccountManagerView({ accounts, setAccounts }) {
     setShowModal(false);
     setBindingStatus({ platform: platform.name, startTime: Date.now(), mode: 'scan' });
     try {
-      const result = await electron.ipcRenderer.invoke('auto-bind-account', {
-          platform: platform.name,
-          proxyStr: formData.proxy
+      // 先创建账户记录
+      const createResult = await electron.ipcRenderer.invoke('db-add-account', {
+        alias: `待绑定_${platform.name}`,
+        group: '默认分组',
+        platform: platform.name,
+        proxy: formData.proxy || '',
+        status: '等待扫码'
       });
-      if (result.success) {
-        const updatedAccounts = await electron.ipcRenderer.invoke('db-get-accounts');
-        setAccounts(updatedAccounts || []);
-        setBindingStatus({ platform: platform.name, startTime: Date.now(), mode: 'scan', done: true, success: true });
-        setTimeout(() => setBindingStatus(null), 3000);
-      } else {
-        setBindingStatus({ platform: platform.name, startTime: Date.now(), mode: 'scan', done: true, success: false, message: result.message });
+      if (!createResult.success) throw new Error(createResult.message || '创建账户失败');
+
+      const accountId = createResult.id || createResult.lastInsertRowid;
+      // 用原生内嵌会话容器打开登录页（不弹外部 Chrome）
+      const openResult = await electron.ipcRenderer.invoke('open-account-session', {
+        platform: platform.name,
+        accountKey: `待绑定_${platform.name}`,
+        customUrl: PLATFORM_URLS[platform.name] || undefined,
+        accountId
+      });
+      if (!openResult.success) throw new Error(openResult.message || '打开浏览器失败');
+
+      // 多标签：新增标签页并切换
+      const newTab = { accountId, platform: platform.name, alias: `待绑定_${platform.name}`, url: PLATFORM_URLS[platform.name] || '' };
+      setBrowserTabs(prev => {
+        if (prev.find(t => String(t.accountId) === String(accountId))) return prev;
+        return [...prev, newTab];
+      });
+      if (activeTabId !== null) {
+        electron.ipcRenderer.send('detach-account-browser', { accountId: String(activeTabId) });
       }
+      setActiveTabId(accountId);
+
+      const updatedAccounts = await electron.ipcRenderer.invoke('db-get-accounts');
+      setAccounts(updatedAccounts || []);
+      setBindingStatus({ platform: platform.name, startTime: Date.now(), mode: 'scan', done: true, success: true });
+      setTimeout(() => setBindingStatus(null), 3000);
     } catch (e) {
-      setBindingStatus({ platform: platform.name, startTime: Date.now(), mode: 'scan', done: true, success: false, message: '后端进程异常' });
+      setBindingStatus({ platform: platform.name, startTime: Date.now(), mode: 'scan', done: true, success: false, message: e.message || '后端进程异常' });
     }
   };
 
@@ -200,7 +331,7 @@ export default function AccountManagerView({ accounts, setAccounts }) {
         if (result.success) {
             const refreshed = await electron.ipcRenderer.invoke('db-get-accounts');
             setAccounts(refreshed || []);
-            setBindingStatus({ platform: pName, startTime: Date.now(), mode: 'cookie', done: true, success: true, message: '环境洗白并提取数据成功！' });
+            setBindingStatus({ platform: pName, startTime: Date.now(), mode: 'cookie', done: true, success: true, message: '会话初始化并提取数据成功！' });
             setCookieStr(''); 
             setTimeout(() => setBindingStatus(null), 3000);
         } else {
@@ -334,15 +465,36 @@ export default function AccountManagerView({ accounts, setAccounts }) {
                          onClick={async () => {
                            if (draggingId === acc.id.toString()) return;
                            const pName = acc.platform;
+                           const idStr = String(acc.id);
+
+                           // 已有标签页 → 直接切换
+                           const existingTab = browserTabs.find(t => String(t.accountId) === idStr);
+                           if (existingTab) {
+                             switchToTab(acc.id);
+                             return;
+                           }
+
+                           // 新建标签页
                            setBindingStatus({ platform: pName, startTime: Date.now(), mode: 'scan' });
                            try {
-                             await electron.ipcRenderer.invoke('open-account-session', { 
-                               platform: pName, 
-                               accountKey: acc.alias, 
-                               customUrl: acc.custom_url || undefined, 
+                             await electron.ipcRenderer.invoke('open-account-session', {
+                               platform: pName,
+                               accountKey: acc.alias,
+                               customUrl: acc.custom_url || undefined,
                                accountId: acc.id
                              });
                              setSniffingStatus(prev => ({ ...prev, [acc.id]: '在线' }));
+
+                             const newTab = { accountId: acc.id, platform: pName, alias: acc.alias, url: acc.custom_url || PLATFORM_URLS[pName] || '' };
+                             setBrowserTabs(prev => {
+                               if (prev.find(t => String(t.accountId) === idStr)) return prev;
+                               return [...prev, newTab];
+                             });
+                             if (activeTabId !== null) {
+                               electron.ipcRenderer.send('detach-account-browser', { accountId: String(activeTabId) });
+                             }
+                             setActiveTabId(acc.id);
+
                              const refreshed = await electron.ipcRenderer.invoke('db-get-accounts');
                              setAccounts(refreshed || []);
                              setBindingStatus(null);
@@ -406,8 +558,85 @@ export default function AccountManagerView({ accounts, setAccounts }) {
         </div>
       </div>
 
-      {/* 右侧：态势感知大屏面板 */}
+      {/* 右侧：多标签浏览器 + 仪表盘 */}
       <div className="flex-1 bg-slate-900 flex flex-col min-w-0 min-h-0 overflow-hidden relative">
+        {/* ─── 标签栏（类似 Chrome Tabs）─── */}
+        {browserTabs.length > 0 && (
+          <div className="flex items-center bg-slate-800 border-b border-slate-700 flex-shrink-0 overflow-x-auto custom-scrollbar">
+            {browserTabs.map(tab => {
+              const isActive = String(activeTabId) === String(tab.accountId);
+              return (
+                <div key={tab.accountId}
+                  onClick={() => switchToTab(tab.accountId)}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-xs cursor-pointer border-r border-slate-700/50 transition flex-shrink-0 select-none ${
+                    isActive
+                      ? 'bg-slate-900 text-white border-t-2 border-t-emerald-400 -mt-[1px]'
+                      : 'bg-slate-800/50 text-slate-400 hover:bg-slate-700/50'
+                  }`}
+                >
+                  <div className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                  <span className="font-bold text-[11px]">{tab.platform}</span>
+                  <span className="text-[10px] text-slate-500 truncate max-w-[80px]">{tab.alias}</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleCloseTab(tab.accountId); }}
+                    className="ml-0.5 p-0.5 rounded hover:bg-red-500/20 text-slate-500 hover:text-red-400 transition"
+                    title="关闭标签"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ─── 地址栏 ─── */}
+        {activeTabId !== null && (
+          <div className="flex items-center gap-1.5 px-2 py-1.5 bg-slate-800 border-b border-slate-700 flex-shrink-0">
+            <button
+              onClick={handleBack}
+              className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition"
+              title="后退"
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <button
+              onClick={handleForward}
+              className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition"
+              title="前进"
+            >
+              <ChevronRight size={14} />
+            </button>
+            <button
+              onClick={handleRefresh}
+              className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition"
+              title="刷新"
+            >
+              <RotateCw size={13} />
+            </button>
+            <input
+              type="text"
+              className="flex-1 bg-slate-700 text-white text-xs px-3 py-1.5 rounded-full outline-none focus:ring-2 focus:ring-indigo-500/50 focus:bg-slate-600 transition font-mono"
+              placeholder="输入网址后按 Enter 跳转..."
+              value={addressInput}
+              onChange={(e) => setAddressInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleNavigate(addressInput);
+                }
+              }}
+              onFocus={(e) => e.target.select()}
+            />
+          </div>
+        )}
+
+        {/* ─── 浏览器视图区 ─── */}
+        {activeTabId !== null && (
+          <div className="flex-1 bg-white" ref={sessionPanelRef} />
+        )}
+
+        {/* ─── 仪表盘（无活跃标签时显示）─── */}
+        {activeTabId === null && (
         <div className="flex-1 flex items-center justify-center">
           {bindingStatus ? (
             bindingStatus.done ? (
@@ -434,7 +663,7 @@ export default function AccountManagerView({ accounts, setAccounts }) {
                 <div className="text-center space-y-3">
                   <h3 className="text-xl font-bold text-white tracking-tight flex items-center justify-center gap-3">
                     {bindingStatus.mode === 'cookie' ? <ShieldAlert size={20} className="text-rose-400" /> : <ExternalLink size={20} className="text-indigo-400" />} 
-                    {bindingStatus.mode === 'cookie' ? '正在执行底层环境洗白...' : '正在调起隔离环境...'}
+                    {bindingStatus.mode === 'cookie' ? '正在执行会话初始化...' : '正在调起隔离环境...'}
                   </h3>
                   <p className="text-sm text-slate-400 max-w-sm leading-relaxed">
                     {bindingStatus.mode === 'cookie' 
@@ -520,7 +749,7 @@ export default function AccountManagerView({ accounts, setAccounts }) {
               <div className="absolute right-8 bottom-1/4 glass-panel p-4 rounded-xl w-64 animate-[float-down_7s_ease-in-out_infinite] z-20">
                 <div className="flex items-center gap-2 mb-3 pb-2 border-b border-indigo-500/20">
                   <Shield size={16} className="text-emerald-400" />
-                  <span className="text-emerald-400 text-xs font-bold uppercase tracking-wider">Stealth Radar</span>
+                  <span className="text-emerald-400 text-xs font-bold uppercase tracking-wider">环境检测</span>
                 </div>
                 <div className="space-y-3 text-xs">
                   <div className="flex justify-between items-center">
@@ -532,7 +761,7 @@ export default function AccountManagerView({ accounts, setAccounts }) {
                     <span className="bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded text-[10px]">ONLINE</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-400">DOM 爆破探针</span>
+                    <span className="text-slate-400">DOM 环境检测</span>
                     <span className="bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded text-[10px]">STANDBY</span>
                   </div>
                 </div>
@@ -544,7 +773,7 @@ export default function AccountManagerView({ accounts, setAccounts }) {
                     全域聚合调度驾驶舱
                   </h2>
                   <p className="text-xs text-slate-400 max-w-md tracking-wider">
-                    底层 <span className="text-cyan-400">Playwright 容器</span> 与 <span className="text-indigo-400">环境洗白引擎</span> 已就绪。<br/>
+                    底层 <span className="text-cyan-400">Playwright 容器</span> 与 <span className="text-indigo-400">会话初始化引擎</span> 已就绪。<br/>
                     请点击左侧的 <span className="text-indigo-400 font-bold">「+ 加账号」</span> 注入新的媒体资产。
                   </p>
                 </div>
@@ -552,6 +781,7 @@ export default function AccountManagerView({ accounts, setAccounts }) {
             </div>
           )}
         </div>
+        )}
       </div>
 
       {/* 新建分组弹窗 */}
@@ -576,7 +806,7 @@ export default function AccountManagerView({ accounts, setAccounts }) {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
               <h3 className="text-base font-bold text-slate-900">
-                {modalStep === 1 ? '添加社交账号节点' : (modalStep === 3 ? '环境协议夺舍' : '自定义资产标签')}
+                {modalStep === 1 ? '添加社交账号节点' : (modalStep === 3 ? 'Cookie 导入' : '自定义资产标签')}
               </h3>
               <button onClick={() => { setShowModal(false); setModalStep(1); setCookieStr(''); }} className="p-1 hover:bg-slate-200 rounded-md text-slate-500 transition"><X size={16} /></button>
             </div>
@@ -586,7 +816,7 @@ export default function AccountManagerView({ accounts, setAccounts }) {
                 <>
                   <div className="flex bg-slate-200/50 p-1 rounded-lg mb-5 max-w-[280px] mx-auto">
                     <button onClick={() => setLoginMethod('scan')} className={`flex-1 py-1.5 text-xs font-bold rounded-md transition ${loginMethod === 'scan' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>常规扫码入网</button>
-                    <button onClick={() => setLoginMethod('cookie')} className={`flex-1 py-1.5 text-xs font-bold rounded-md transition flex items-center justify-center gap-1 ${loginMethod === 'cookie' ? 'bg-white shadow-sm text-rose-600' : 'text-slate-500 hover:text-slate-700'}`}><ShieldAlert size={12}/> CK 协议夺舍</button>
+                    <button onClick={() => setLoginMethod('cookie')} className={`flex-1 py-1.5 text-xs font-bold rounded-md transition flex items-center justify-center gap-1 ${loginMethod === 'cookie' ? 'bg-white shadow-sm text-rose-600' : 'text-slate-500 hover:text-slate-700'}`}><ShieldAlert size={12}/> Cookie 导入</button>
                   </div>
                   
                   <div className="grid grid-cols-4 gap-3 max-h-[40vh] overflow-y-auto p-1">
@@ -646,7 +876,7 @@ export default function AccountManagerView({ accounts, setAccounts }) {
                 <div className="space-y-4 max-w-lg mx-auto animate-in fade-in slide-in-from-bottom-2">
                   <div className="text-center mb-2">
                       <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-rose-50 text-rose-600 rounded-full text-xs font-bold border border-rose-100">
-                          <Shield size={12}/> 目标接管平台: {selectedPlatform?.name}
+                          <Shield size={12}/> 目标平台: {selectedPlatform?.name}
                       </span>
                   </div>
                   <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
@@ -677,7 +907,7 @@ export default function AccountManagerView({ accounts, setAccounts }) {
                   <div className="flex gap-3 pt-2">
                     <button onClick={() => { setModalStep(1); setCookieStr(''); }} className="px-5 py-3 bg-slate-100 text-slate-600 rounded-lg font-bold text-sm hover:bg-slate-200 transition">返回</button>
                     <button onClick={handleCookieSubmit} className="flex-1 bg-rose-600 text-white py-3 rounded-lg font-bold text-sm shadow-md shadow-rose-500/30 transition flex items-center justify-center hover:bg-rose-700 hover:shadow-rose-500/50">
-                        <ShieldAlert size={16} className="mr-2" /> 强制夺舍并洗白环境
+                        <ShieldAlert size={16} className="mr-2" /> 导入 Cookie 并初始化会话
                     </button>
                   </div>
                 </div>

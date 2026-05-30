@@ -4,3 +4,17 @@ out
 .DS_Store
 .eslintcache
 *.log*
+
+# Runtime data — account fingerprints & states
+account_fingerprints/
+account_states/
+
+# Secrets
+.env
+
+# Claude Code
+.claude/
+
+# Temp / backup cruft
+*_temp.json
+*.bak.enc
