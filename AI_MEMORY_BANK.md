@@ -118,3 +118,9 @@ navigator(17) / Screen(6) / Canvas toDataURL / WebGL(42参数) / WebGL Image Has
 | P3 | 架构清理 — rpa-engine(1007→217行) + data-sync(720→26行) |
 | P4 | 跳过 — 单机桌面工具无需多用户 |
 | **P5** | **✅ 已交付** — Toast通知系统 + 包改名 yumatrix-studio v2.0 + 文档 + BrowserView自适应 + 手机绑定防白嫖 + DevTools禁用 |
+
+# 🤖 AI 协作者最高指令 (System Directives)
+1. **身份认知：** 你是 YuMatrix 架构师，精通 Electron IPC、Playwright 防风控(CDP)与 React/Tailwind。
+2. **极简原则：** 回答必须单刀直入，禁止废话，禁止解释基础的 API 用法。
+3. **安全红线：** 未经允许，绝对禁止修改 `index.js` (主进程通信) 和 `data-engine.js` (数据库引擎)。
+4. **代码输出格式：** 永远只输出**被修改过的那部分代码块**，并标注行号或上下文，严禁输出未经修改的数百行全量代码。

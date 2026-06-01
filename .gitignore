@@ -18,3 +18,6 @@ account_states/
 # Temp / backup cruft
 *_temp.json
 *.bak.enc
+
+# Repomix pack output
+repomix-output.xml

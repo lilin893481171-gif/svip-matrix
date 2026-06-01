@@ -12,6 +12,8 @@
     "start": "electron-vite preview",
     "dev": "chcp 65001 && electron-vite dev",
     "build": "electron-vite build",
+    "pack:main": "npx repomix --ignore \"account_fingerprints/**/*,account_states/**/*,node_modules/**/*,dist/**/*,public/**/*\" --include \"src/main/**/*,src/scripts/**/*\" && node check-size.js",
+    "pack:ui": "npx repomix --ignore \"account_fingerprints/**/*,account_states/**/*,node_modules/**/*,dist/**/*,public/**/*,src/renderer/src/assets/**/*\" --include \"src/renderer/src/**/*\" && node check-size.js",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",

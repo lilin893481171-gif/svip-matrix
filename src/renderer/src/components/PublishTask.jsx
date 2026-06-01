@@ -7,8 +7,12 @@ import {
 } from 'lucide-react';
 import MediaLibraryPanel from './MediaLibraryPanel';
 import AIFillPanel from './AIFillPanel';
-import XHSPublishMock from './XHSPublishMock';
+import XiaohongshuPanel from './XiaohongshuPanel';
+import KuaishouPanel from './KuaishouPanel';
+import BilibiliPanel from './BilibiliPanel';
 import CommonConfigPanel from './CommonConfigPanel';
+import WechatChannelsPanel from './WechatChannelsPanel';
+import BaijiahaoPanel from './BaijiahaoPanel';
 import { SYSTEM_MEDIA_FOLDER } from '../config/matrixConfig';
 import { useToast } from './ToastContext';
 
@@ -624,11 +628,11 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       );
     }
 
-    // ==================== 🔥 2. 小红书（沉浸式原生编辑器） ====================
+    // ==================== 🔥 2. 小红书（原生编辑器） ====================
     if (activeEditorTab === '小红书') {
       const xhsConfig = { ...uConfig, ...pConfig };
       return (
-        <XHSPublishMock
+        <XiaohongshuPanel
           config={xhsConfig}
           onChange={(field, value) => updateConfig('小红书', field, value)}
           onPublish={() => handlePublish('小红书')}
@@ -637,632 +641,55 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       );
     }
 
-// ==================== 🔥 2. 快手（cp.kuaishou.com 1:1 原生复刻） ====================
-if (activeEditorTab === '快手') {
-  const ksTitle = pConfig.title ?? uConfig.title ?? '';
-  const ksDesc = pConfig.desc ?? uConfig.desc ?? '';
-  const now = new Date();
-  const timeStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-  return (
-    <div className="min-h-full bg-[#f5f6f7] flex font-sans text-[14px] text-[#333] animate-in fade-in duration-300">
-      {/* ========== 左：核心编辑区 ========== */}
-      <div className="flex-1 min-w-0 overflow-y-auto pb-24">
-        <div className="px-6 pt-5 max-w-[720px] space-y-5">
+// ==================== 🔥 3. 快手 ====================
+    if (activeEditorTab === '快手') {
+      return (
+        <KuaishouPanel
+          config={pConfig}
+          onChange={(field, value) => updateConfig('快手', field, value)}
+          onPublish={() => handlePublish('快手')}
+          onSaveDraft={() => console.log('[快手] 存草稿', pConfig)}
+        />
+      );
+    }
 
-          {/* ─── 1. 作品描述 + AI 栏 ─── */}
-          <section>
-            <label className="text-[14px] text-[#666] mb-2 block">作品描述</label>
-            <div className="border border-[#e5e5e5] rounded-md overflow-hidden focus-within:border-[#FF7700] transition-colors bg-white">
-              <textarea
-                className="w-full h-[140px] p-4 text-[14px] text-[#333] outline-none resize-none bg-transparent placeholder-[#ccc] leading-relaxed"
-                placeholder="作品描述不会写？试试智能文案"
-                value={ksDesc}
-                onChange={e => updateConfig('快手', 'desc', e.target.value)}
-              />
-              {/* AI 辅助栏 */}
-              <div className="border-t border-[#f0f0f0] bg-[#fafafa] px-4 py-3">
-                <div className="flex items-center gap-3 mb-2">
-                  <button className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-[#e5e5e5] rounded-full text-[12px] text-[#666] hover:border-[#FF7700] hover:text-[#FF7700] transition">
-                    <Sparkles size={13} /> 智能文案
-                  </button>
-                  <button className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-[#e5e5e5] rounded-full text-[12px] text-[#666] hover:border-[#FF7700] hover:text-[#FF7700] transition">
-                    <Hash size={13} /> 智能话题
-                  </button>
-                  <button className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-[#e5e5e5] rounded-full text-[12px] text-[#666] hover:border-[#FF7700] hover:text-[#FF7700] transition">
-                    <AtSign size={13} /> 好友
-                  </button>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[11px] text-[#999]">推荐:</span>
-                  {['#这才是男人该玩的打火机','#是时候该露一手了','#给你看个好东西','#zippo打火机'].map(t => (
-                    <span key={t} className="text-[11px] text-[#FF7700] bg-orange-50 px-2 py-0.5 rounded cursor-pointer hover:bg-orange-100 transition">{t}</span>
-                  ))}
-                  <span className="text-[11px] text-[#999] cursor-pointer hover:text-[#FF7700]">全部</span>
-                </div>
-              </div>
-            </div>
-          </section>
+// ==================== 🔥 4. B站 ====================
+    if (activeEditorTab === 'B站') {
+      return (
+        <BilibiliPanel
+          config={pConfig}
+          onChange={(field, value) => updateConfig('B站', field, value)}
+          onPublish={() => handlePublish('B站')}
+          onSaveDraft={() => console.log('[B站] 存草稿', pConfig)}
+        />
+      );
+    }
 
-          {/* ─── 2. 活动推荐 ─── */}
-          <section>
-            <label className="text-[14px] text-[#666] mb-2 flex items-center gap-1 block">活动推荐</label>
-            <div className="space-y-2">
-              {[
-                { img: 'https://p23-plat.wsukwai.com/udata/pkg/ai-cover-SQEvnndV-1779937849581.png?x-kcdn-pid=112531', title: '你应该出去看看' },
-                { img: 'https://p23-plat.wsukwai.com/udata/pkg/ai-cover-WaPfITdX-1780044292859.png?x-kcdn-pid=112531', title: '一个普通的下午' },
-              ].map((act, i) => (
-                <div key={i} className="flex items-center gap-3 bg-white border border-[#eee] rounded-lg p-2.5 hover:border-[#FF7700]/30 transition cursor-pointer">
-                  <img src={act.img} alt="" className="w-12 h-12 rounded object-cover flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-medium text-[#333]">{act.title}</div>
-                  </div>
-                  <span className="text-[12px] text-[#666] flex items-center gap-1 flex-shrink-0">去领取 <ChevronRight size={14} /></span>
-                </div>
-              ))}
-              <div className="text-[12px] text-[#999] cursor-pointer hover:text-[#FF7700]">全部</div>
-            </div>
-          </section>
-
-          {/* ─── 3. 封面设置 ─── */}
-          <section>
-            <label className="text-[14px] text-[#666] mb-2 flex items-center gap-1 block">封面设置</label>
-            <div className="bg-white border border-[#eee] rounded-lg p-4">
-              <div className="flex gap-4">
-                {/* 当前封面 */}
-                <div className="w-[120px] h-[160px] bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 relative cursor-pointer border-2 border-dashed border-gray-200 hover:border-[#FF7700] flex items-center justify-center">
-                  {activeVideo?.config?.universal?.coverUrl ? (
-                    <img src={activeVideo.config.universal.coverUrl} className="w-full h-full object-cover" alt="" />
-                  ) : (
-                    <span className="text-[11px] text-gray-400">点击上传封面</span>
-                  )}
-                </div>
-                {/* 智能推荐封面 */}
-                <div className="flex-1 min-w-0">
-                  <div className="text-[12px] text-[#666] mb-2 font-medium">智能推荐封面</div>
-                  <div className="flex gap-2">
-                    {[1,2,3].map(i => (
-                      <div key={i} className="w-[80px] h-[106px] bg-gray-100 rounded-lg border border-gray-100 cursor-pointer hover:border-[#FF7700] flex items-center justify-center text-[11px] text-gray-400">
-                        推荐{i}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              {/* PK 封面 */}
-              <div className="flex items-center justify-end mt-3 pt-3 border-t border-[#f5f5f5]">
-                <span className="text-[12px] text-[#666] mr-3">PK封面</span>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" className="sr-only peer" onChange={e => updateConfig('快手', 'pkCover', e.target.checked)} />
-                  <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#FF7700]" />
-                </label>
-              </div>
-            </div>
-          </section>
-
-          {/* ─── 4. 作者服务 ─── */}
-          <section className="flex items-center gap-3">
-            <label className="text-[14px] text-[#666] flex-shrink-0">作者服务</label>
-            <select className="w-[168px] border border-[#e5e5e5] rounded px-3 py-2 text-[13px] text-[#333] outline-none focus:border-[#FF7700] bg-white mr-2" value={pConfig.authorService || ''} onChange={e => updateConfig('快手', 'authorService', e.target.value)}>
-              <option value="">选择服务类型</option>
-              <option value="ecom">电商带货</option>
-              <option value="live">直播预约</option>
-              <option value="course">付费课程</option>
-            </select>
-            <input className="flex-1 border border-[#e5e5e5] rounded px-3 py-2 text-[13px] text-[#999] outline-none focus:border-[#FF7700] bg-[#f5f5f5] placeholder-[#999]" placeholder="关联成功可获得更多收益" disabled />
-          </section>
-
-          {/* ─── 5. 作者声明 ─── */}
-          <section className="flex items-center gap-3">
-            <label className="text-[14px] text-[#666] flex-shrink-0">作者声明</label>
-            <select className="flex-1 border border-[#e5e5e5] rounded px-3 py-2 text-[13px] text-[#333] outline-none focus:border-[#FF7700] bg-white" value={pConfig.authorDeclare || ''} onChange={e => updateConfig('快手', 'authorDeclare', e.target.value)}>
-              <option value="">为作品添加补充说明</option>
-              <option value="original">原创内容</option>
-              <option value="ai">包含AI生成内容</option>
-              <option value="ad">包含商业推广</option>
-            </select>
-          </section>
-
-          {/* ─── 6. 添加地点 ─── */}
-          <section className="flex items-center gap-3">
-            <label className="text-[14px] text-[#666] flex-shrink-0">添加地点</label>
-            <select className="w-[168px] border border-[#e5e5e5] rounded px-3 py-2 text-[13px] text-[#333] outline-none focus:border-[#FF7700] bg-white mr-2" value={pConfig.poi || ''} onChange={e => updateConfig('快手', 'poi', e.target.value)}>
-              <option value="">请选择所在地区</option>
-              <option value="北京">北京</option>
-              <option value="上海">上海</option>
-              <option value="广州">广州</option>
-              <option value="深圳">深圳</option>
-            </select>
-            <input className="flex-1 border border-[#e5e5e5] rounded px-3 py-2 text-[13px] text-[#999] outline-none focus:border-[#FF7700] bg-[#f5f5f5] placeholder-[#999]" placeholder="请输入视频详细地址，让同城老铁看见你" disabled />
-          </section>
-
-          {/* ─── 7. 发布设置 ─── */}
-          <section className="mt-2">
-            <h3 className="text-[16px] font-bold text-[#333] mb-4">发布设置</h3>
-            <div className="bg-white border border-[#eee] rounded-lg p-5 space-y-5">
-
-              {/* 互动设置 */}
-              <div>
-                <label className="text-[14px] text-[#333] font-bold mb-3 block">互动设置</label>
-                <div className="flex flex-wrap gap-x-8 gap-y-2">
-                  {[
-                    { key: 'allowDuet', label: '允许别人跟我拍同框', def: true },
-                    { key: 'allowDownload', label: '允许下载此作品', def: true },
-                    { key: 'showCity', label: '作品展示在同城页', def: true },
-                  ].map(item => (
-                    <label key={item.key} className="flex items-center cursor-pointer">
-                      <input type="checkbox" className="w-4 h-4 accent-[#FF7700] mr-2" checked={pConfig[item.key] ?? item.def} onChange={e => updateConfig('快手', item.key, e.target.checked)} />
-                      <span className="text-[14px] text-[#333]">{item.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* 查看权限 */}
-              <div>
-                <label className="text-[14px] text-[#333] font-bold mb-3 block">查看权限</label>
-                <div className="flex gap-8">
-                  {[
-                    { val: 'public', label: '所有人可见' },
-                    { val: 'friend', label: '好友可见' },
-                    { val: 'private', label: '仅自己可见' },
-                  ].map(opt => (
-                    <label key={opt.val} className="flex items-center cursor-pointer">
-                      <input type="radio" name="ks_vis" className="accent-[#FF7700] mr-2" checked={pConfig.visibility === opt.val || (!pConfig.visibility && opt.val === 'public')} onChange={() => updateConfig('快手', 'visibility', opt.val)} />
-                      <span className="text-[14px] text-[#333]">{opt.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* 发布时间 */}
-              <div>
-                <label className="text-[14px] text-[#333] font-bold mb-3 block">发布时间</label>
-                <div className="flex gap-8">
-                  <label className="flex items-center cursor-pointer">
-                    <input type="radio" name="ks_time" className="accent-[#FF7700] mr-2" checked={!pConfig.scheduled} onChange={() => updateConfig('快手', 'scheduled', false)} />
-                    <span className="text-[14px] text-[#333]">立即发布</span>
-                  </label>
-                  <label className="flex items-center cursor-pointer">
-                    <input type="radio" name="ks_time" className="accent-[#FF7700] mr-2" checked={!!pConfig.scheduled} onChange={() => updateConfig('快手', 'scheduled', true)} />
-                    <span className="text-[14px] text-[#333]">定时发布</span>
-                  </label>
-                </div>
-                {pConfig.scheduled && (
-                  <input type="datetime-local" className="mt-3 border border-[#e5e5e5] rounded p-2.5 text-[13px] text-[#333] outline-none focus:border-[#FF7700] w-[240px]" value={pConfig.scheduleTime || ''} onChange={e => updateConfig('快手', 'scheduleTime', e.target.value)} />
-                )}
-                {/* 粉丝活跃高峰提示 */}
-                <div className="mt-3 flex items-center gap-2 bg-orange-50 border border-orange-100 rounded-lg px-3 py-2">
-                  <span className="text-[18px]">⏰</span>
-                  <span className="text-[12px] text-[#cc6600] flex-1">你的粉丝在20:00到21:00点活跃，在该时间发布可提升流量～</span>
-                  <button className="text-[11px] text-[#FF7700] font-medium hover:underline flex-shrink-0">一键设置</button>
-                </div>
-              </div>
-
-            </div>
-          </section>
-
-          {/* ─── 底部按钮 ─── */}
-          <div className="flex justify-center gap-4 pt-4 pb-8">
-            <button className="w-[96px] h-[36px] bg-white border border-[#e5e5e5] text-[#333] rounded-full text-[13px] font-medium hover:bg-[#f5f5f5] transition">取消</button>
-            <button onClick={() => handlePublish('快手')} className="w-[96px] h-[36px] bg-[#FF7700] text-white rounded-full text-[13px] font-medium hover:bg-[#e66a00] transition active:scale-95 shadow-[0_2px_8px_rgba(255,119,0,0.3)]">发布</button>
-          </div>
-        </div>
-      </div>
-
-      {/* ========== 中：手机预览 ========== */}
-      <div className="w-[375px] flex-shrink-0 bg-[#f5f6f7] overflow-y-auto border-l border-[#e8e8e8] py-5 px-4 hidden xl:block">
-        <div className="sticky top-5">
-          <div className="bg-white rounded-[40px] p-2.5 shadow-[0_8px_30px_rgba(0,0,0,0.08)] border-[5px] border-[#1a1a1a] mx-auto" style={{ width: 280 }}>
-            {/* Tab 切换 */}
-            <div className="flex bg-[#f0f0f0] p-1 rounded-full text-[12px] font-medium mb-2.5">
-              {['预览封面','预览作品'].map((tab, i) => (
-                <button key={tab} className={`flex-1 py-1.5 rounded-full transition ${i === 1 ? 'bg-white shadow-sm text-[#333]' : 'text-[#999]'}`}>{tab}</button>
-              ))}
-            </div>
-            {/* 视频预览 */}
-            <div className="bg-black rounded-2xl overflow-hidden relative aspect-[9/16] max-h-[420px]">
-              {activeVideo?.url ? (
-                <video src={activeVideo.url} className="w-full h-full object-cover" controlsList="nodownload" loop muted />
-              ) : (
-                <div className="w-full h-full bg-[#1a1a1a] flex items-center justify-center text-[11px] text-gray-500">视频预览</div>
-              )}
-              {/* Play 按钮 */}
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="w-11 h-11 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>
-                </div>
-              </div>
-              {/* 右侧互动按钮 */}
-              <div className="absolute right-2 bottom-16 flex flex-col items-center gap-3 text-white">
-                <div className="w-8 h-8 bg-white/20 rounded-full border border-white/40" />
-                {[{icon:'♡',label:'赞'},{icon:'☆',label:'收藏'},{icon:'💬',label:'评论'}].map(item => (
-                  <div key={item.label} className="flex flex-col items-center gap-0.5">
-                    <span className="text-lg leading-none">{item.icon}</span>
-                    <span className="text-[9px]">{item.label}</span>
-                  </div>
-                ))}
-              </div>
-              {/* 底部信息 */}
-              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-3 pt-8">
-                <div className="flex items-center gap-2 mb-1.5">
-                  <div className="w-6 h-6 rounded-full bg-gray-500 border border-white/50 flex-shrink-0" />
-                  <span className="text-white text-[11px] font-medium">@潮玩一族</span>
-                  <span className="text-white/60 text-[10px] ml-auto flex-shrink-0 px-2 py-0.5 bg-white/15 rounded-full text-[9px] border border-white/20">关注</span>
-                </div>
-                {ksTitle && <p className="text-white text-[11px] leading-tight line-clamp-2">{ksTitle}</p>}
-                <p className="text-white/60 text-[10px] mt-0.5">{ksDesc?.slice(0, 40)}{(ksDesc?.length||0) > 40 ? '...' : ''}</p>
-              </div>
-            </div>
-          </div>
-          {/* 重新上传 */}
-          <div className="flex justify-center mt-3">
-            <button className="flex items-center gap-1.5 px-4 py-2 border border-[#ddd] rounded-full text-[12px] text-[#666] hover:border-[#FF7700] hover:text-[#FF7700] transition bg-white">
-              <RefreshCw size={13} /> 重新上传
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* ========== 右：创作助手 ========== */}
-      <div className="w-[260px] flex-shrink-0 border-l border-[#e8e8e8] bg-white overflow-y-auto py-5 px-4 hidden 2xl:block">
-        <div className="sticky top-5">
-          <div className="flex items-center gap-2 mb-4 pb-3 border-b border-[#f0f0f0]">
-            <span className="text-[16px]">🤖</span>
-            <span className="text-[13px] font-bold text-[#333]">创作助手</span>
-          </div>
-          <div className="text-[12px] text-[#999] leading-relaxed mb-4">发文助手为你护航，检查笔记是否符合社区规范</div>
-          <button className="w-full py-2.5 bg-[#f5f5f5] text-[#333] rounded-full text-[12px] font-medium hover:bg-[#eee] transition mb-3">开始检测</button>
-          <div className="text-center text-[11px] text-[#ccc] mb-5">今日剩余 10 次</div>
-
-          {/* 流量提升建议 */}
-          <div>
-            <h4 className="text-[13px] font-bold text-[#333] mb-3">流量提升建议</h4>
-            {[
-              { icon: '📝', title: '去优化标题', desc: '为了让更多人搜索到你的作品，建议使用智能推荐标题' },
-              { icon: '⏰', title: '在粉丝浏览高峰期发布', desc: '你的粉丝一般会在20:00-21:00浏览作品' },
-            ].map((tip, i) => (
-              <div key={i} className="mb-3 last:mb-0">
-                <div className="flex items-center gap-2 text-[12px] font-medium text-[#333] hover:text-[#FF7700] cursor-pointer transition">
-                  <span>{tip.icon}</span>
-                  <span>{tip.title}</span>
-                  <ChevronRight size={14} className="ml-auto text-[#ccc]" />
-                </div>
-                <p className="text-[11px] text-[#999] mt-1 ml-6">{tip.desc}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ==================== 🔥 4. B站（已完全对齐最新截图） ====================
-if (activeEditorTab === 'B站') {
-  return (
-    <div className="bg-[#f5f6f7] min-h-full animate-in fade-in duration-300 py-6 pb-32 font-sans px-4 sm:px-8">
-      <div className="max-w-[840px] w-full mx-auto space-y-5">
-        <PlatformHeader platform={activeEditorTab} />
-
-        <div className="bg-white p-8 shadow-sm border border-[#e3e4e5] rounded-xl space-y-8">
-          
-          {/* 标题 */}
-          <div className="flex items-center">
-            <div className="w-[100px] text-[14px] text-[#222] font-bold flex items-center">
-              <span className="text-[#f25d8e] mr-1">*</span>标题
-            </div>
-            <div className="flex-1 relative flex gap-2">
-              <input
-                className="flex-1 border border-[#ccd0d7] rounded p-2.5 text-[14px] text-[#222] outline-none focus:border-[#00aeec] transition hover:border-[#b8c0cc]"
-                value={pConfig.title ?? uConfig.title}
-                onChange={e => updateConfig('B站', 'title', e.target.value)}
-                placeholder="请输入标题"
-              />
-            </div>
-          </div>
-
-          {/* 类型：自制 / 转载 */}
-          <div className="flex items-center">
-            <div className="w-[100px] text-[14px] text-[#222] font-bold">类型</div>
-            <div className="flex gap-8">
-              <label className="flex items-center cursor-pointer group">
-                <input 
-                  type="radio" 
-                  name="bili_type" 
-                  className="mr-2 accent-[#00aeec] w-[15px] h-[15px]" 
-                  checked={pConfig.type !== '转载'} 
-                  onChange={() => updateConfig('B站', 'type', '自制')} 
-                />
-                <span className="text-[14px] text-[#222] group-hover:text-[#00aeec] transition">自制</span>
-              </label>
-              <label className="flex items-center cursor-pointer group">
-                <input 
-                  type="radio" 
-                  name="bili_type" 
-                  className="mr-2 accent-[#00aeec] w-[15px] h-[15px]" 
-                  checked={pConfig.type === '转载'} 
-                  onChange={() => updateConfig('B站', 'type', '转载')} 
-                />
-                <span className="text-[14px] text-[#222] group-hover:text-[#00aeec] transition">转载</span>
-              </label>
-            </div>
-          </div>
-
-          {/* 分区（科技数码等） */}
-          <div className="flex items-center">
-            <div className="w-[100px] text-[14px] text-[#222] font-bold flex items-center">
-              <span className="text-[#f25d8e] mr-1">*</span>分区
-            </div>
-            <select 
-              className="w-[220px] border border-[#ccd0d7] rounded p-2.5 text-[14px] text-[#222] outline-none focus:border-[#00aeec] hover:border-[#b8c0cc] transition bg-white" 
-              value={pConfig.category || '科技数码'} 
-              onChange={e => updateConfig('B站', 'category', e.target.value)}
-            >
-              <option value="科技数码">科技数码</option>
-              <option value="游戏">游戏</option>
-              <option value="生活">生活</option>
-              <option value="知识">知识</option>
-              <option value="动画">动画</option>
-              <option value="音乐">音乐</option>
-              <option value="舞蹈">舞蹈</option>
-              <option value="影视">影视</option>
-              <option value="娱乐">娱乐</option>
-              <option value="鬼畜">鬼畜</option>
-              <option value="时尚">时尚</option>
-              <option value="其他">其他</option>
-            </select>
-          </div>
-
-          {/* 简介 */}
-          <div className="flex items-start">
-            <div className="w-[100px] text-[14px] text-[#222] mt-2 font-bold">简介</div>
-            <textarea
-              className="flex-1 border border-[#ccd0d7] rounded p-3 text-[14px] text-[#222] outline-none focus:border-[#00aeec] hover:border-[#b8c0cc] transition resize-none h-32"
-              placeholder="填写更全面的相关信息，让更多的人能找到你的视频吧"
-              value={pConfig.desc ?? uConfig.desc}
-              onChange={e => updateConfig('B站', 'desc', e.target.value)}
-            />
-          </div>
-
-          {/* 定时发布 */}
-          <div className="flex items-center border-t border-[#f0f0f0] pt-6">
-            <div className="w-[100px] text-[14px] text-[#222] font-bold">定时发布</div>
-            <div className="flex items-center gap-3">
-              <ToggleRight 
-                size={32} 
-                className={pConfig.scheduled ? "text-[#00aeec] cursor-pointer" : "text-[#ccd0d7] cursor-pointer"} 
-                onClick={() => updateConfig('B站', 'scheduled', !pConfig.scheduled)} 
-              />
-              <span className="text-[12px] text-[#99a2aa]">
-                （可选择距离当前最早≥5分钟/最晚≤15天的时间）
-              </span>
-            </div>
-          </div>
-          {pConfig.scheduled && (
-            <div className="ml-[100px]">
-              <input 
-                type="datetime-local" 
-                className="border border-[#ccd0d7] rounded p-2 text-[13px] text-[#222] outline-none focus:border-[#00aeec]" 
-                value={pConfig.scheduleTime || ''} 
-                onChange={e => updateConfig('B站', 'scheduleTime', e.target.value)} 
-              />
-            </div>
-          )}
-
-          {/* 二创设置 + 商业推广 */}
-          <div className="flex items-center border-t border-[#f0f0f0] pt-6 gap-8">
-            <label className="flex items-center cursor-pointer group">
-              <input 
-                type="checkbox" 
-                className="mr-2 w-[14px] h-[14px] accent-[#00aeec]" 
-                checked={pConfig.allowRecreate ?? false} 
-                onChange={e => updateConfig('B站', 'allowRecreate', e.target.checked)}
-              />
-              <span className="text-[14px] text-[#505050] group-hover:text-[#00aeec] transition">允许二创</span>
-            </label>
-
-            <label className="flex items-center cursor-pointer group">
-              <input 
-                type="checkbox" 
-                className="mr-2 w-[14px] h-[14px] accent-[#00aeec]" 
-                checked={pConfig.commercial ?? false} 
-                onChange={e => updateConfig('B站', 'commercial', e.target.checked)}
-              />
-              <span className="text-[14px] text-[#505050] group-hover:text-[#00aeec] transition">增加商业推广信息</span>
-            </label>
-          </div>
-
-          {/* 底部按钮 */}
-          <div className="pt-8 pb-8 flex justify-center gap-4 border-t border-[#e3e4e5] mt-6">
-            <button className="px-10 py-2.5 bg-white border border-[#e3e4e5] text-[#505050] rounded-xl text-[14px] font-bold hover:border-[#00aeec] hover:text-[#00aeec] transition shadow-sm">存草稿</button>
-            <button 
-              onClick={() => handlePublish('B站')} 
-              className="px-12 py-2.5 bg-[#00aeec] text-white rounded-xl shadow-md text-[14px] font-bold hover:bg-[#0098ce] transition active:scale-95"
-            >
-              立即投稿
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ==================== 🔥 5. 微信视频号（紧凑适配版） ====================
-
+// ==================== 🔥 5. 微信视频号（全功能专属面板） ====================
 if (activeEditorTab === '微信视频号') {
-
+  const wxConfig = { ...uConfig, ...pConfig };
   return (
-    <div className="bg-[#f5f6f7] min-h-full animate-in fade-in duration-300 py-4 pb-24 font-sans px-3 sm:px-6">
-      {/* 容器宽度从 840px 缩至 720px，更适配主流屏幕 */}
-      <div className="max-w-[720px] w-full mx-auto space-y-4">
-        <PlatformHeader platform={activeEditorTab} />
-
-        {/* 卡片内边距从 p-8 缩至 p-6，垂直间距从 space-y-8 缩至 space-y-6 */}
-        <div className="bg-white rounded-2xl shadow-sm border border-[#e3e4e5] p-6 space-y-6">
-
-          {/* 基础信息 */}
-          <div>
-            {/* 标题边距优化 */}
-            <h3 className="text-[15px] font-black text-[#333] mb-4 flex items-center border-l-4 border-[#07C160] pl-2">
-              基础信息
-            </h3>
-
-            {/* 短标题 + 视频描述 */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                <div className="w-[90px] text-[#666] text-[13px] font-bold flex-shrink-0">短标题</div>
-                <input 
-                  className="flex-1 border border-[#e3e4e5] rounded-xl h-10 px-3 text-[13px] text-[#333] outline-none focus:border-[#07C160] placeholder-[#999]" 
-                  placeholder="6–16 字，概括内容" 
-                  value={pConfig.title ?? uConfig.title} 
-                  onChange={e => updateConfig('微信视频号', 'title', e.target.value)} 
-                />
-              </div>
-
-              <div className="flex items-start gap-4">
-                <div className="w-[90px] text-[#666] text-[13px] font-bold flex-shrink-0 mt-2">视频描述</div>
-                <textarea 
-                  className="flex-1 border border-[#e3e4e5] rounded-xl p-3 text-[13px] text-[#333] outline-none focus:border-[#07C160] resize-none h-24 placeholder-[#999]" 
-                  placeholder="写文案、表情、#话题标签" 
-                  value={pConfig.desc ?? uConfig.desc} 
-                  onChange={e => updateConfig('微信视频号', 'desc', e.target.value)} 
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 分割线 */}
-          <div className="h-px bg-[#f0f0f0]" />
-
-          {/* 权益与商业变现 */}
-          <div>
-            <h3 className="text-[15px] font-black text-[#333] mb-4 flex items-center border-l-4 border-[#f99b3b] pl-2">
-              权益与商业变现
-            </h3>
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                <div className="w-[90px] text-[#666] text-[13px] font-bold flex-shrink-0">声明原创</div>
-                <label className="flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    className="mr-2 w-4 h-4 accent-[#07C160]" 
-                    checked={pConfig.isOriginal ?? uConfig.original} 
-                    onChange={e => updateConfig('微信视频号', 'isOriginal', e.target.checked)} 
-                  />
-                  <span className="text-[13px] text-[#333]">开启原创声明</span>
-                </label>
-              </div>
-
-              <div className="flex items-center gap-4">
-                <div className="w-[90px] text-[#666] text-[13px] font-bold flex-shrink-0">商品挂车</div>
-                <input 
-                  className="flex-1 border border-[#e3e4e5] rounded-xl h-10 px-3 text-[13px] text-[#333] outline-none focus:border-[#07C160]" 
-                  placeholder="粘贴商品ID / 链接" 
-                  value={pConfig.productLink || ''} 
-                  onChange={e => updateConfig('微信视频号', 'productLink', e.target.value)} 
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 分割线 */}
-          <div className="h-px bg-[#f0f0f0]" />
-
-          {/* 流量扩展 */}
-          <div>
-            <h3 className="text-[15px] font-black text-[#333] mb-4 flex items-center border-l-4 border-[#2b88ff] pl-2">
-              流量扩展
-            </h3>
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                <div className="w-[90px] text-[#666] text-[13px] font-bold flex-shrink-0">地理位置</div>
-                <input 
-                  className="flex-1 border border-[#e3e4e5] rounded-xl h-10 px-3 text-[13px] text-[#333] outline-none focus:border-[#07C160]" 
-                  placeholder="添加精准定位（提升本地流量）" 
-                  value={pConfig.poi || ''} 
-                  onChange={e => updateConfig('微信视频号', 'poi', e.target.value)} 
-                />
-              </div>
-
-              <div className="flex items-center gap-4">
-                <div className="w-[90px] text-[#666] text-[13px] font-bold flex-shrink-0">定时发表</div>
-                <div className="flex items-center gap-6">
-                  <label className="flex items-center cursor-pointer">
-                    <input 
-                      type="radio" 
-                      checked={!pConfig.scheduled} 
-                      onChange={() => updateConfig('微信视频号', 'scheduled', false)} 
-                      className="accent-[#07C160]" 
-                    />
-                    <span className="ml-2 text-[13px]">直接发表</span>
-                  </label>
-                  <label className="flex items-center cursor-pointer">
-                    <input 
-                      type="radio" 
-                      checked={pConfig.scheduled} 
-                      onChange={() => updateConfig('微信视频号', 'scheduled', true)} 
-                      className="accent-[#07C160]" 
-                    />
-                    <span className="ml-2 text-[13px]">定时发表</span>
-                  </label>
-                </div>
-              </div>
-
-              {/* 定时选择器左边距同步标签宽度 */}
-              {pConfig.scheduled && (
-                <div className="ml-[90px]">
-                  <input 
-                    type="datetime-local" 
-                    className="border border-[#e3e4e5] rounded-xl h-10 px-3 text-[13px] text-[#333] outline-none focus:border-[#07C160]" 
-                    value={pConfig.scheduleTime || ''} 
-                    onChange={e => updateConfig('微信视频号', 'scheduleTime', e.target.value)} 
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* 底部按钮：间距和尺寸优化 */}
-          <div className="pt-6 flex justify-center gap-3 border-t border-[#e3e4e5]">
-            <button className="px-8 py-2.5 bg-white border border-[#e3e4e5] text-[#666] rounded-xl text-[13px] font-bold hover:bg-[#f9f9f9] transition shadow-sm">存入草稿</button>
-            <button 
-              onClick={() => handlePublish('微信视频号')} 
-              className="px-12 py-2.5 bg-[#07C160] text-white rounded-xl shadow-md text-[14px] font-black hover:bg-[#06ad56] transition active:scale-95 shadow-[#07C160]/30"
-            >
-              发表至视频号
-            </button>
-          </div>
-        </div>
-      </div>
+    <div className="bg-[#f5f6f7] min-h-full animate-in fade-in duration-300 py-6 flex justify-center">
+      <WechatChannelsPanel
+        config={wxConfig}
+        onChange={(field, value) => updateConfig('微信视频号', field, value)}
+        onPublish={() => handlePublish('微信视频号')}
+        onSaveDraft={() => console.log('[微信视频号] 存草稿', wxConfig)}
+        activeVideo={activeVideo}
+      />
     </div>
   );
 }
 
-    // ==================== 🔥 6. 百家号（全新SOP版） ====================
+    // ==================== 🔥 6. 百家号 ====================
     if (activeEditorTab === '百家号') {
       return (
-        <div className="bg-[#f5f6f7] min-h-full animate-in fade-in duration-300 py-6 pb-32 font-sans px-4 sm:px-8">
-          <div className="max-w-[840px] w-full mx-auto space-y-5">
-            <PlatformHeader platform={activeEditorTab} />
-
-            <div className="bg-white p-6 rounded-xl border border-[#e3e4e5] shadow-sm space-y-5">
-              <div>
-                <div className="flex justify-between mb-2"><span className="text-[14px] font-bold text-[#333]">文章标题</span><span className="text-[11px] font-mono text-[#999] bg-slate-100 px-2 py-0.5 rounded">{(pConfig.title ?? uConfig.title)?.length || 0}/50</span></div>
-                <input className="w-full border border-[#e3e4e5] p-3.5 rounded-xl text-[15px] font-bold outline-none focus:border-[#2b88ff] bg-[#fcfcfc]" placeholder="好的标题能获得更多推荐..." value={pConfig.title ?? uConfig.title} onChange={e => updateConfig('百家号', 'title', e.target.value)} />
-              </div>
-
-              <div className="flex flex-wrap gap-3">
-                <button className="px-4 py-2 bg-slate-50 text-[#666] text-[13px] font-bold rounded-lg border border-slate-200 hover:border-[#2b88ff] hover:text-[#2b88ff] transition-all flex items-center"><Hash size={14} className="mr-1.5"/> 插入话题</button>
-              </div>
-            </div>
-
-            <div className="pt-6 pb-8 flex justify-center gap-4 border-t border-[#e3e4e5] mt-6">
-              <button className="px-8 py-2.5 bg-white text-[#666] font-bold rounded-xl text-[13px] hover:bg-slate-50 transition border border-[#e3e4e5] shadow-sm">存入草稿</button>
-              <button onClick={() => handlePublish('百家号')} className="px-10 py-2.5 bg-[#2b88ff] text-white font-black rounded-xl text-[13px] hover:bg-[#1a73e8] transition shadow-md shadow-blue-200 active:scale-95">立刻发布至百家号</button>
-            </div>
-          </div>
-        </div>
+        <BaijiahaoPanel
+          config={pConfig}
+          onChange={(field, value) => updateConfig('百家号', field, value)}
+          onPublish={() => handlePublish('百家号')}
+          onSaveDraft={() => updateConfig('百家号', '_draftSaved', true)}
+        />
       );
     }
 
