@@ -8,6 +8,7 @@ import {
 import MediaLibraryPanel from './MediaLibraryPanel';
 import AIFillPanel from './AIFillPanel';
 import XHSPublishMock from './XHSPublishMock';
+import CommonConfigPanel from './CommonConfigPanel';
 import { SYSTEM_MEDIA_FOLDER } from '../config/matrixConfig';
 import { useToast } from './ToastContext';
 
@@ -484,40 +485,12 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
 
     if (activeEditorTab === 'universal') {
       return (
-        <div className="p-5 bg-white space-y-6 animate-in fade-in slide-in-from-left-4 duration-300">
-          <div className="bg-slate-50 text-slate-600 text-xs p-3 rounded-lg border border-slate-200 font-bold flex items-center">
-            <Globe size={14} className="mr-2"/> 在这里填写的内容，将作为所有平台的默认兜底数据。
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <label className="text-[10px] font-bold text-slate-500 uppercase mb-2 block">通用视频标题 (Title)</label>
-              <input className="w-full border border-slate-200 rounded-xl p-3 text-sm outline-none focus:border-indigo-500 shadow-inner bg-slate-50" placeholder="填写全局默认标题..." value={uConfig.title} onChange={e=>updateConfig('universal', 'title', e.target.value)} />
-            </div>
-            <div>
-              <label className="text-[10px] font-bold text-slate-500 uppercase mb-2 flex items-center">通用话题库 (自动加#)</label>
-              <input className="w-full border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:border-indigo-500 transition-colors bg-slate-50" placeholder="如: 数码 极客 好物 (空格分隔)" value={uConfig.tags} onChange={e=>updateConfig('universal', 'tags', e.target.value)} />
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <label className="text-[10px] font-bold text-slate-500 uppercase mb-2 flex items-center justify-between">
-                <span>通用视频描述 / 简介 (Description)</span>
-              </label>
-              <textarea className="w-full border border-slate-200 rounded-xl p-3 text-sm outline-none focus:border-indigo-500 resize-none h-24 shadow-inner bg-slate-50" placeholder="填写介绍，机器臂发文时会自动在末尾拼接话题标签..." value={uConfig.desc} onChange={e=>updateConfig('universal', 'desc', e.target.value)} />
-            </div>
-            <div>
-              <label className="text-[10px] font-bold text-emerald-600 uppercase flex items-center mb-2"><MessageCircle size={14} className="mr-1"/> 首发评论置顶 (引导转化神器)</label>
-              <textarea className="w-full border border-emerald-200 rounded-xl p-3 text-sm outline-none focus:border-emerald-500 resize-none h-24 shadow-inner bg-emerald-50/30 placeholder-emerald-400/50" placeholder="机器臂在发完视频后，会自动在评论区抢首楼发这段话..." value={uConfig.firstComment || ''} onChange={e=>updateConfig('universal', 'firstComment', e.target.value)} />
-            </div>
-          </div>
-          <div className="flex items-center space-x-6 pt-4 border-t border-slate-100">
-            <label className="flex items-center text-xs font-bold text-slate-700 cursor-pointer bg-slate-50 border border-slate-200 px-4 py-2 rounded-lg hover:border-indigo-300 transition">
-              <input type="checkbox" className="mr-2 w-4 h-4 text-indigo-600 rounded" checked={uConfig.original ?? true} onChange={e=>updateConfig('universal', 'original', e.target.checked)} /> 开启原创声明 (全平台兼容生效)
-            </label>
-            <label className="flex items-center text-xs font-bold text-slate-700 cursor-pointer bg-slate-50 border border-slate-200 px-4 py-2 rounded-lg hover:border-indigo-300 transition">
-              <input type="checkbox" className="mr-2 w-4 h-4 text-indigo-600 rounded" checked={uConfig.aigc ?? false} onChange={e=>updateConfig('universal', 'aigc', e.target.checked)} /> 包含 AI 生成内容 (全平台兼容生效)
-            </label>
-          </div>
+        <div className="flex justify-center py-6 animate-in fade-in duration-300">
+          <CommonConfigPanel
+            config={uConfig}
+            onChange={(field, value) => updateConfig('universal', field, value)}
+            activeVideo={activeVideo}
+          />
         </div>
       );
     }
