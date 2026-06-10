@@ -6,13 +6,15 @@ import PublishTask from './components/PublishTask';
 import PublishHistoryView from './components/PublishHistoryView';
 import InteractionView from './components/InteractionView';
 import AiHubView from "./components/AiHub/AiHubView";
+import EmailMatrixPanel from "./components/AiHub/panels/EmailMatrixPanel";
+import AppLauncherWidget from './components/AppLauncherWidget';
 import { AiTaskProvider } from './components/AiHub/AiTaskContext'; // 引入大脑
 import { ToastProvider, useToast } from './components/ToastContext';
 
 import logoImg from './assets/logo.png';
 import { 
-  Users, Send, Activity, MessageSquare, PieChart, 
-  LogOut, Shield, AlignLeft, ChevronRight, Archive, Bot, Smartphone, Gift, X,
+  Users, Send, Activity, MessageSquare, PieChart,
+  LogOut, Shield, AlignLeft, ChevronRight, Archive, Bot, Smartphone, Gift, X, Mail,
   QrCode, RefreshCw, Check // 🌟 新增了扫码登录需要的图标
 } from 'lucide-react';
 
@@ -239,12 +241,73 @@ function LoginScreen({ onLogin }) {
 }
 
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false); // 🌟 设为 false 让其先展示登录页
+  const [isLoggedIn, setIsLoggedIn] = useState(true); // 🔧 开发模式跳过登录，上线前改回 false
   const [activeTab, setActiveTab] = useState('publish');
   const [accounts, setAccounts] = useState([]);
-  const [videoList, setVideoList] = useState([]);
+
+  // 🆕 localStorage 持久化视频草稿（关闭软件后重新配置补发仍可用）
+  const VL_KEY = 'video_list_v1';
+  const [videoList, setVideoList] = useState(() => {
+    try {
+      const raw = localStorage.getItem(VL_KEY);
+      if (!raw) return [];
+      const data = JSON.parse(raw);
+      const records = data.records || [];
+      const now = Date.now();
+      const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+      return records.filter(v => {
+        // 只保留未完成的（未配置/已就绪/发布中），已完成的超过 7 天清除
+        if (['发布完成', '已取消', '含失败项'].includes(v.status)) {
+          return now - (v._updatedAt || 0) < SEVEN_DAYS;
+        }
+        return true;
+      });
+    } catch { return []; }
+  });
   const [activeVideoId, setActiveVideoId] = useState(null);
-  const [publishHistory, setPublishHistory] = useState([]);
+
+  // 🆕 localStorage 持久化发布历史
+  const LS_KEY = 'publish_history_v1';
+  const [publishHistory, setPublishHistory] = useState(() => {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return [];
+      const data = JSON.parse(raw);
+      const records = data.records || [];
+      const now = Date.now();
+      const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+      // 过滤掉超过 7 天的已完成/已取消记录
+      return records.filter(r => {
+        if (['任务成功', '任务失败', '已取消'].includes(r.status)) {
+          const endTime = r.endTime || r.startTime || 0;
+          return now - endTime < SEVEN_DAYS;
+        }
+        return true; // 运行中/排队中的保留
+      });
+    } catch { return []; }
+  });
+
+  // 🆕 每次 videoList 变化同步写 localStorage（带时间戳）
+  useEffect(() => {
+    try {
+      localStorage.setItem(VL_KEY, JSON.stringify({
+        version: 1,
+        updatedAt: Date.now(),
+        records: videoList.map(v => ({ ...v, _updatedAt: Date.now() }))
+      }));
+    } catch {}
+  }, [videoList]);
+
+  // 🆕 每次 publishHistory 变化同步写 localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        version: 1,
+        updatedAt: Date.now(),
+        records: publishHistory
+      }));
+    } catch {}
+  }, [publishHistory]);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isPublishFullscreen, setIsPublishFullscreen] = useState(false);
   const [sidebarPrefs, setSidebarPrefs] = useState(() => {
@@ -260,7 +323,6 @@ export default function App() {
   const [publishStep, setPublishStep] = useState(0);
   const [publishEditorTab, setPublishEditorTab] = useState('universal');
   const [publishWorkbenchVideos, setPublishWorkbenchVideos] = useState([]);
-  const [publishIsDryRun, setPublishIsDryRun] = useState(true);
 
   // ─── 全屏沉浸编辑 Esc 退出 ───
   useEffect(() => {
@@ -312,35 +374,53 @@ export default function App() {
     }
     loadData();
 
-    const handleUpdate = (event, payload) => {
-      const safeMsg = (typeof payload.error === 'object' && payload.error) 
-        ? String(payload.error.message || JSON.stringify(payload.error)) 
-        : String(payload.error || payload.status || '未知状态');
-      
+    const handleUpdate = (payload) => {
+      const safeMsg = (typeof payload.error === 'object' && payload.error)
+        ? String(payload.error.message || JSON.stringify(payload.error))
+        : String(payload.error || payload.message || payload.status || '未知状态');
+
+      const isFinal = ['任务圆满成功', '任务成功', '任务失败', '已取消', '任务已取消', '用户终止', '已转手动接管', '手动发布已完成', '手动发布完成中...', '需要重新扫码登录'].includes(payload.status);
+      const statusType = payload.statusType || (isFinal ? (payload.status.includes('取消') ? 'cancelled' : payload.status.includes('成功') ? 'success' : 'error') : 'running');
+
       setPublishHistory(prev => {
         const exists = prev.find(item => item.historyId === payload.historyId);
         if (exists) {
-          return prev.map(item => item.historyId === payload.historyId 
-            ? { ...item, status: payload.status, message: safeMsg, platform: payload.platform || item.platform, accountAlias: payload.accountAlias || item.accountAlias } 
+          return prev.map(item => item.historyId === payload.historyId
+            ? {
+                ...item,
+                status: payload.status,
+                statusType,
+                message: safeMsg,
+                platform: payload.platform || item.platform,
+                accountAlias: payload.accountAlias || item.accountAlias,
+                startTime: payload.startTime || item.startTime,
+                endTime: payload.endTime || (isFinal ? Date.now() : undefined),
+                errorMessage: statusType === 'error' ? safeMsg : (item.errorMessage || '')
+              }
             : item
           );
         }
-        return [{ 
-          historyId: payload.historyId, videoId: payload.videoId, videoName: payload.title || '未知视频', 
-          platform: payload.platform || '', accountAlias: payload.accountAlias || '', 
-          status: payload.status, time: new Date(payload.timestamp).toLocaleTimeString(), message: safeMsg 
+        return [{
+          historyId: payload.historyId, videoId: payload.videoId, videoName: payload.title || '未知视频',
+          platform: payload.platform || '', accountAlias: payload.accountAlias || '',
+          status: payload.status, statusType,
+          time: new Date(payload.timestamp).toLocaleTimeString(), message: safeMsg,
+          startTime: payload.startTime || Date.now(),
+          endTime: isFinal ? Date.now() : undefined,
+          errorMessage: statusType === 'error' ? safeMsg : ''
         }, ...prev];
       });
 
-      if (['任务成功', '任务失败', '已取消'].includes(payload.status)) {
-        setVideoList(prev => prev.map(v => v.id === payload.videoId 
-          ? { ...v, status: payload.status === '任务成功' ? '发布完成' : payload.status === '已取消' ? '已取消' : '含失败项' } 
+      if (isFinal) {
+        // 任务终态 → 视频回池。成功保留"发布完成"，其余回"已就绪"可删可重发
+        setVideoList(prev => prev.map(v => v.id === payload.videoId
+          ? { ...v, status: statusType === 'success' ? '发布完成' : '已就绪' }
           : v));
       }
     };
 
-    if (electron.ipcRenderer.on) electron.ipcRenderer.on('task-progress-update', handleUpdate);
-    return () => { if (electron.ipcRenderer.removeAllListeners) electron.ipcRenderer.removeAllListeners('task-progress-update'); };
+    const unsub = electron.ipcRenderer.on('task-progress-update', handleUpdate);
+    return () => { if (unsub) unsub(); };
   }, [isLoggedIn]);
 
   // 🤖 智能折叠侧边栏（方案F：默认策略 + 用户手动记忆）
@@ -454,6 +534,7 @@ export default function App() {
             <NavItem icon={<Activity />} label="流速与风控" id="monitor" activeTab={activeTab} setActiveTab={setActiveTab} isSidebarCollapsed={isSidebarCollapsed} />
             <NavItem icon={<MessageSquare />} label="评论私信总控" id="interact" activeTab={activeTab} setActiveTab={setActiveTab} isSidebarCollapsed={isSidebarCollapsed} />
             <NavItem icon={<Archive />} label="发布队列与历史" id="history" activeTab={activeTab} setActiveTab={setActiveTab} isSidebarCollapsed={isSidebarCollapsed} />
+            <NavItem icon={<Mail />} label="全域邮件总控" id="email" activeTab={activeTab} setActiveTab={setActiveTab} isSidebarCollapsed={isSidebarCollapsed} />
           </div>
 
           <div className="p-4 border-t border-slate-900 bg-black/20">
@@ -479,7 +560,8 @@ export default function App() {
             <div className="font-bold text-slate-700 text-lg">
               {activeTab === 'publish' && '千人千面超级工作站 (12平台 1:1 原生复刻)'}
               {activeTab === 'aihub' && 'Matrix AI Hub 商业级算力聚合分发引擎'}
-              {activeTab !== 'publish' && activeTab !== 'aihub' && '全平台聚合调度驾驶舱'}
+              {activeTab === 'email' && '全域邮件矩阵总控中心 · 智能商务邮件处理'}
+              {activeTab !== 'publish' && activeTab !== 'aihub' && activeTab !== 'email' && '全平台聚合调度驾驶舱'}
             </div>
             <div className="flex items-center space-x-3">
               <div className="w-8 h-8 rounded-full bg-slate-900 text-red-500 flex items-center justify-center font-bold text-sm shadow-md border border-red-500/30">N</div>
@@ -488,11 +570,12 @@ export default function App() {
           </header>
           )}
 
-          <div className={`flex-1 overflow-y-auto ${isPublishFullscreen ? 'p-0' : 'p-4'}`}>
+          <div className={`flex-1 overflow-y-auto ${isPublishFullscreen ? 'p-0' : 'p-4'} ${activeTab === 'email' ? '!p-0 !overflow-hidden' : ''}`}>
+            {activeTab === 'email' && <EmailMatrixPanel />}
             {activeTab === 'dashboard' && <StatisticsView setActiveTab={setActiveTab} />}
             {activeTab === 'accounts' && <AccountManagerView accounts={accounts} setAccounts={setAccounts} browserTabs={browserTabs} setBrowserTabs={setBrowserTabs} activeTabId={activeTabId} setActiveTabId={setActiveTabId} />}
-            {activeTab === 'publish' && <PublishTask setActiveTab={setActiveTab} accounts={accounts} videoList={videoList} setVideoList={setVideoList} activeVideoId={activeVideoId} setActiveVideoId={setActiveVideoId} publishHistory={publishHistory} setPublishHistory={setPublishHistory} publishStep={publishStep} setPublishStep={setPublishStep} publishEditorTab={publishEditorTab} setPublishEditorTab={setPublishEditorTab} publishWorkbenchVideos={publishWorkbenchVideos} setPublishWorkbenchVideos={setPublishWorkbenchVideos} publishIsDryRun={publishIsDryRun} setPublishIsDryRun={setPublishIsDryRun} isPublishFullscreen={isPublishFullscreen} setIsPublishFullscreen={setIsPublishFullscreen} />}
-            {activeTab === 'history' && <PublishHistoryView videoList={videoList} setVideoList={setVideoList} publishHistory={publishHistory} setActiveTab={setActiveTab} setActiveVideoId={setActiveVideoId} />}
+            {activeTab === 'publish' && <PublishTask setActiveTab={setActiveTab} accounts={accounts} videoList={videoList} setVideoList={setVideoList} activeVideoId={activeVideoId} setActiveVideoId={setActiveVideoId} publishHistory={publishHistory} setPublishHistory={setPublishHistory} publishStep={publishStep} setPublishStep={setPublishStep} publishEditorTab={publishEditorTab} setPublishEditorTab={setPublishEditorTab} publishWorkbenchVideos={publishWorkbenchVideos} setPublishWorkbenchVideos={setPublishWorkbenchVideos} isPublishFullscreen={isPublishFullscreen} setIsPublishFullscreen={setIsPublishFullscreen} />}
+            {activeTab === 'history' && <PublishHistoryView videoList={videoList} setVideoList={setVideoList} publishHistory={publishHistory} setPublishHistory={setPublishHistory} setActiveTab={setActiveTab} setActiveVideoId={setActiveVideoId} setPublishStep={setPublishStep} />}
             {activeTab === 'monitor' && <RiskControl/>}
             {activeTab === 'interact' && <InteractionView accounts={accounts} />}
             
@@ -507,6 +590,7 @@ export default function App() {
         </div>
       </div>
     </AiTaskProvider>
+    <AppLauncherWidget />
     </ToastProvider>
   );
 }

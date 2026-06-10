@@ -8,6 +8,7 @@ import { launchEmbeddedAccountBrowser, detachAccountBrowser, closeEmbeddedAccoun
 import { ipcMain, app } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import { safeDeletePartition, teardownPartition } from './safe-delete.js';
 import { getDB } from './database.js';
 import * as cheerio from 'cheerio'; 
 
@@ -204,7 +205,7 @@ const PLATFORM_URLS = {
   '百家号': 'https://baijiahao.baidu.com/builder/rc/home',
   '微信视频号': 'https://channels.weixin.qq.com/platform',
   '快手': 'https://cp.kuaishou.com/profile',
-  '小红书': 'https://www.xiaohongshu.com', 
+  '小红书': 'https://creator.xiaohongshu.com/new/home',
 };
 
 // ==========================================================
@@ -447,67 +448,21 @@ async function runSingleSync(accountId, platform) {
 // 会话状态巡检：原生主页重定向探测
 // ==========================================================
 export async function checkAccountStatus(accountId, platform) {
+    // 原生 BrowserView 会话存活 = 在线
     if (isSandboxActive(accountId)) {
         return { success: true, status: '在线' };
     }
-
-    let browserSession = null;
-    try {
-        const db = getDB();
-        const acc = db.prepare('SELECT proxy FROM accounts WHERE id = ?').get(accountId);
-        
-        browserSession = await launchSandbox(accountId, { headless: true, proxy: acc?.proxy });
-        const { page } = browserSession;
-        let isOnline = false;
-        page.setDefaultTimeout(15000);
-
-        if (platform === '抖音') {
-            await page.goto('https://creator.douyin.com/creator-micro/home', { waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(2000);
-            isOnline = !page.url().includes('login');
-        } 
-        else if (platform === '小红书') {
-            await page.goto('https://www.xiaohongshu.com', { waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(2500); 
-            const isLoginModalVisible = await page.evaluate(() => {
-                const modal = document.querySelector('.login-container, .login-box');
-                return modal && window.getComputedStyle(modal).display !== 'none';
-            });
-            isOnline = !isLoginModalVisible;
-        } 
-        else if (platform === 'B站') {
-            await page.goto('https://member.bilibili.com/platform/home', { waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(2000);
-            isOnline = !page.url().includes('passport.bilibili.com') && !page.url().includes('login');
-        } 
-        else if (platform === '快手') {
-            await page.goto('https://cp.kuaishou.com/profile', { waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(2500);
-            isOnline = !page.url().includes('passport.kuaishou.com') && !page.url().includes('login');
-        } 
-        else if (platform === '百家号') {
-            await page.goto('https://baijiahao.baidu.com/builder/rc/home', { waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(2000);
-            isOnline = !page.url().includes('login') && !page.url().includes('pass.baidu.com');
-        } 
-        else if (platform === '微信视频号') {
-            await page.goto('https://channels.weixin.qq.com/platform', { waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(2000);
-            isOnline = !page.url().includes('login');
-        } 
-        else {
-            isOnline = true; 
-        }
-
-        await closeSandbox(accountId);
-        const statusStr = isOnline ? '在线' : '登录失效';
-        getDB().prepare('UPDATE accounts SET status = ? WHERE id = ?').run(statusStr, accountId);
-        return { success: true, status: statusStr };
-    } catch (e) {
-        if (browserSession) await closeSandbox(accountId);
-        getDB().prepare('UPDATE accounts SET status = ? WHERE id = ?').run('离线异常', accountId);
-        return { success: false, status: '离线异常' };
+    const nativeSessions = getActiveNativeSessions();
+    if (nativeSessions.some(s => String(s.accountId) === String(accountId))) {
+        return { success: true, status: '在线' };
     }
+
+    // 无活跃会话 → 信任 DB 中最后一次记录的状态，不再启动 Playwright 巡检
+    const db = getDB();
+    const acc = db.prepare('SELECT status FROM accounts WHERE id = ?').get(accountId);
+    const dbStatus = acc?.status || '离线';
+    console.log(`[巡检] 账号 #${accountId} 无活跃会话，信任 DB 状态: ${dbStatus}`);
+    return { success: true, status: dbStatus };
 }
 
 // ==========================================================
@@ -535,27 +490,18 @@ export function registerDataEngineIPC() {
             }
           }
 
-          const result = await launchEmbeddedAccountBrowser(accountId, {
-            headless: false,
-            proxy: acc?.proxy
-          });
-          if (!result.success) throw new Error(result.message || '原生会话容器启动失败');
-
-          const { webContents } = result;
-
           let targetUrl = PLATFORM_URLS[platform] || 'https://www.baidu.com';
           if (platform === '小红书') {
               targetUrl = 'https://creator.xiaohongshu.com/new/home';
           }
           if (customUrl) targetUrl = customUrl;
 
-          // 加载前再清除一次 SSL 缓存，防止协议握手失败导致白屏
-          try {
-            await webContents.session.clearHostResolverCache();
-            await webContents.session.clearCache();
-          } catch (e) {}
-
-          await webContents.loadURL(targetUrl);
+          const result = await launchEmbeddedAccountBrowser(accountId, {
+            headless: false,
+            proxy: acc?.proxy,
+            platform,
+            targetUrl
+          });
 
           return { success: true };
       } catch (error) {
@@ -569,6 +515,19 @@ export function registerDataEngineIPC() {
     try {
       detachAccountBrowser(accountId);
       await closeEmbeddedAccountBrowser(accountId);
+      return { success: true };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  });
+
+  // 清除账户会话数据（清空 Cookie/缓存分区）
+  ipcMain.removeHandler('clear-account-session-data');
+  ipcMain.handle('clear-account-session-data', async (_event, { accountId }) => {
+    try {
+      const partitionName = `chrome_data_${accountId}`;
+      const partitionDir = path.join(app.getPath('userData'), 'Partitions', partitionName);
+      await teardownPartition(partitionDir, partitionName);
       return { success: true };
     } catch (error) {
       return { success: false, message: error.message };
@@ -596,12 +555,16 @@ export function registerDataEngineIPC() {
   ipcMain.handle('auto-bind-account', async (event, payload) => {
       let platform = '', proxyStr = '';
       if (typeof payload === 'string') {
-          platform = payload; 
+          platform = payload;
       } else {
           platform = payload.platform;
           proxyStr = payload.proxyStr || '';
       }
-      return await autoBindAccount(platform, proxyStr);
+      try {
+          return await autoBindAccount(platform, proxyStr);
+      } catch (err) {
+          return { success: false, message: err.message };
+      }
   });
 
   ipcMain.removeHandler('get-account-list');

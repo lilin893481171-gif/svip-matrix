@@ -5,6 +5,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { useAiTasks } from '../AiTaskContext';
+import usePersistentState from '../../../hooks/usePersistentState';
 
 // ──────────────────────────────────────────────
 // 工具元数据配置表（配置驱动，不改组件逻辑）
@@ -111,14 +112,6 @@ const RENDER_STAGES = [
   '最终画面合成与色彩校准...',
 ];
 
-function usePersistentState(key, defaultValue) {
-  const [value, setValue] = useState(() => {
-    try { return window.localStorage.getItem(key) !== null ? JSON.parse(window.localStorage.getItem(key)) : defaultValue; }
-    catch (e) { return defaultValue; }
-  });
-  useEffect(() => { window.localStorage.setItem(key, JSON.stringify(value)); }, [key, value]);
-  return [value, setValue];
-}
 
 // ──────────────────────────────────────────────
 // 组件本体

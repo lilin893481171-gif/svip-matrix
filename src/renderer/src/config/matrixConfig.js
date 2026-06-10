@@ -2,9 +2,8 @@
 // YuMatrix 统一配置中心 —— 所有环境变量与 Worker 路由的单一事实来源
 // =====================================================================
 
-// Matrix 认证令牌 (构建时注入，本地开发使用占位符)
-export const MATRIX_AUTH_TOKEN =
-  import.meta.env.VITE_MATRIX_AUTH_TOKEN || 'matrix-test-token-123';
+// Matrix 认证令牌 (构建时注入，缺少时拒绝启动以避免泄露默认值)
+export const MATRIX_AUTH_TOKEN = import.meta.env.VITE_MATRIX_AUTH_TOKEN;
 
 // Cloudflare Worker 网关域名
 export const CF_API_DOMAIN =
@@ -18,45 +17,50 @@ export const MATRIX_WORKER_URL =
 // 发布工作台：系统预设媒体文件夹 & 平台 AI 文案模板
 // =====================================================================
 
-// AI 生成的视频默认输出目录
-export const SYSTEM_MEDIA_FOLDER = 'D:/MatrixApp/ai_output/';
+// AI 生成的视频默认输出目录 (可通过环境变量覆盖)
+export const SYSTEM_MEDIA_FOLDER = import.meta.env.VITE_SYSTEM_MEDIA_FOLDER || '';
 
 // 各平台 AI 填表 Prompt 模板（调性 / 标题限制 / 标签规范 / 禁止事项）
 export const PLATFORM_COPY_PROMPTS = {
   '抖音': {
     tone: '口语化、强互动、制造悬念或争议、前3秒钩子、节奏快、多用感叹号和反问句',
-    titleMax: 55,
+    titleMax: 30,
     descTone: '轻松活泼，引导评论互动，结尾加引导语（如"你觉得呢？"）',
-    tagStyle: '热门话题标签 + 垂直领域标签，8-10个',
+    tagStyle: '热门话题标签 + 垂直领域标签',
+    tagMax: 5,
     rules: '禁止出现微信号/二维码/外站链接；禁止违禁词（第一/最/国家级）；标题避免过于标题党'
   },
   '小红书': {
     tone: '情绪化、大量Emoji、闺蜜/姐妹口吻、种草风、真诚分享感',
     titleMax: 20,
     descTone: '像写笔记一样自然，多用✨💯🔥等emoji，分点列举，结尾加相关话题',
-    tagStyle: '精准关键词标签 + 热门话题标签，5-8个',
+    tagStyle: '精准关键词标签 + 热门话题标签',
+    tagMax: 5,
     rules: '禁止站外引流链接；禁止明显广告用语；标题不可夸张失实；内容需有真实分享感'
   },
   'B站': {
     tone: '深度硬核、专业数据支撑、可加幽默吐槽、长尾关键词覆盖',
     titleMax: 80,
-    descTone: '结构化分章节介绍，可加时间戳导航，引用专业术语，结尾引导三连',
-    tagStyle: '精准分区标签 + 内容方向标签 + 热门话题，8-10个',
+    descTone: '用2-3段话概括内容核心亮点，引用专业术语，结尾引导三连',
+    tagStyle: '精准分区标签 + 内容方向标签 + 热门话题',
+    tagMax: 5,
     rules: '禁止低质标题党；标题需与内容强相关；分区选择必须准确；简介中可放合理外部链接'
   },
   '微信视频号': {
     tone: '简洁有力、偏正能量、适合朋友圈转发、标题有共鸣感',
     titleMax: 30,
-    descTone: '简短精炼，强调价值点或情感共鸣，可带#话题',
-    tagStyle: '3-5个精准话题标签',
+    descTone: '简短精炼，强调价值点或情感共鸣，可带#话题；有搜索短标题字段，≤20字概括视频主要内容',
+    tagStyle: '精准话题标签',
+    tagMax: 5,
     rules: '禁止诱导分享/关注；禁止夸大宣传；内容需符合微信内容规范'
   },
   '快手': {
     tone: '接地气、真实感、老铁口吻、突出反差或实用价值',
-    titleMax: 30,
-    descTone: '直接说重点，用"老铁""兄弟们"等亲切称呼，强调实用或有趣',
-    tagStyle: '热门挑战标签 + 领域标签，5-8个',
-    rules: '禁止低俗内容；禁止诱导双击/关注；标题不可过度夸张'
+    titleMax: 0,
+    descTone: '标题和描述合并在一个字段，格式为【标题】\\n描述内容，直接说重点，用"老铁""兄弟们"等亲切称呼',
+    tagStyle: '热门挑战标签 + 领域标签',
+    tagMax: 5,
+    rules: '禁止低俗内容；禁止诱导双击/关注；标题不可过度夸张；注意：平台无独立标题字段，title 留空，标题内容通过【标题】格式放在 desc 开头'
   },
   '知乎': {
     tone: '理性客观、有数据支撑、先抛问题再给答案、专业但不晦涩',
@@ -74,9 +78,10 @@ export const PLATFORM_COPY_PROMPTS = {
   },
   '百家号': {
     tone: '新闻化、客观专业、标题准确概括内容、适合搜索引擎收录',
-    titleMax: 30,
+    titleMax: 50,
     descTone: '新闻导语式开头，正文结构化，注重SEO关键词布局',
-    tagStyle: '精准领域标签，3-5个',
+    tagStyle: '精准领域标签',
+    tagMax: 5,
     rules: '禁止标题党；禁止抄袭搬运；内容需原创或合法授权；禁止违规推广'
   },
   '企鹅号(腾讯)': {

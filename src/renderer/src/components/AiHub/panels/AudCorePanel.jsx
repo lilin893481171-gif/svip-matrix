@@ -7,15 +7,8 @@ import { uploadToCloudinary } from '../../../services/cloudinaryService';
 import { authHeaders, workerUrl, WORKER_ROUTES } from '../../../config/matrixConfig';
 import { useAiTasks } from '../AiTaskContext';
 import VibeVoiceViewer from './VibeVoiceViewer';
+import usePersistentState from '../../../hooks/usePersistentState';
 
-function usePersistentState(key, defaultValue) {
-  const [value, setValue] = useState(() => {
-    try { return window.localStorage.getItem(key) !== null ? JSON.parse(window.localStorage.getItem(key)) : defaultValue; }
-    catch (e) { return defaultValue; }
-  });
-  useEffect(() => { window.localStorage.setItem(key, JSON.stringify(value)); }, [key, value]);
-  return [value, setValue];
-}
 
 const OFFICIAL_VOICES = [
   { id: 'v_movie', name: '影视解说-小帅', tag: '悬疑/叙事', demo: 'https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-dinosaur.mp3' },

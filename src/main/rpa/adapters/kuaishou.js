@@ -66,8 +66,6 @@ export class KuaishouAdapter {
       } catch (e) {}
     }
 
-    if (this.task.dryRun) { this.broadcast('🛑 预览模式完成'); return; }
-
     this.broadcast('发布...');
     await this.i.clickElement('div._button-primary_3a3lq_60 > div, button:has-text("发布")');
     await sleep(8000);

@@ -1,8 +1,32 @@
 /**
  * @file rpa/self-test.js
  * RPA 会话环境自检 — CDP 持久化注入 + WebRTC 网络栈防护验证
+ *
+ * ⚠️ 自检用 file:// URL（不用 data:）：
+ *   Chromium 的 Page.addScriptToEvaluateOnNewDocument 对 data: scheme
+ *   不触发，导致自检误报「导航后丢失」。file:// 走完整导航管线，CDP 注入
+ *   100% 触发，自检结果真实反映线上行为。
  */
 import { BrowserController } from './browser-controller.js';
+import { writeFileSync, unlinkSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { app } from 'electron';
+
+const prepareFileURL = (name) => {
+  const dir = join(app.getPath('temp'), 'yumatrix-selftest');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, name + '.html');
+  writeFileSync(path, `<!DOCTYPE html><meta charset=utf-8><h1>${name}</h1>`);
+  return 'file:///' + path.replace(/\\/g, '/');
+};
+
+function cleanupSelfTestFiles() {
+  try {
+    const dir = join(app.getPath('temp'), 'yumatrix-selftest');
+    try { unlinkSync(join(dir, 'selftest_a.html')); } catch (_) {}
+    try { unlinkSync(join(dir, 'selftest_b.html')); } catch (_) {}
+  } catch (_) {}
+}
 
 export async function runRPASelfTest() {
   console.log('');
@@ -11,13 +35,16 @@ export async function runRPASelfTest() {
   console.log('╚══════════════════════════════════════════════╝');
   console.log('');
 
+  cleanupSelfTestFiles();
   const bc = new BrowserController('selftest_' + Date.now());
   try {
     await bc.launch();
     console.log('[自检] ✅ 会话容器启动成功');
 
     const wc = bc.webContents;
-    await wc.loadURL('data:text/html,<h1>Matrix SelfTest A</h1>');
+
+    // ── 页面A：CDP 注入验证 — file:// 触发 addScriptToEvaluateOnNewDocument ──
+    await wc.loadURL(prepareFileURL('selftest_a'));
     await new Promise(r => setTimeout(r, 1500));
 
     const pageA = await wc.executeJavaScript(`
@@ -46,7 +73,8 @@ export async function runRPASelfTest() {
     console.log('  screen:', checkA.screenW + 'x' + checkA.screenH, '(Screen.prototype 覆盖为已知缺陷, 不影响风控)');
     console.log('  WebGL:', checkA.hasWebGL ? '✅' : '❌');
 
-    await wc.loadURL('data:text/html,<h1>Matrix SelfTest B</h1>');
+    // ── 页面B：导航后持久化验证 ──
+    await wc.loadURL(prepareFileURL('selftest_b'));
     await new Promise(r => setTimeout(r, 1500));
 
     const pageB = await wc.executeJavaScript(`
@@ -88,9 +116,11 @@ export async function runRPASelfTest() {
     console.log('');
 
     await bc.close();
+    cleanupSelfTestFiles();
     return { ok: navOk, cdpOk, checkA, checkB };
   } catch (e) {
     try { await bc.close(); } catch (e2) {}
+    cleanupSelfTestFiles();
     console.error('[自检] ❌ 异常:', e.message);
     console.log('');
     return { ok: false, error: e.message };

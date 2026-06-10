@@ -72,8 +72,6 @@ export class DouyinAdapter {
     if (this.task.syncToutiao) await this.i.flexibleClick(['同步至今日头条']);
     if (this.task.isOriginal) await this.i.flexibleClick(['声明原创']);
 
-    if (this.task.dryRun) { this.broadcast('🛑 预览模式完成！'); return; }
-
     this.broadcast('点火发布...');
     await this.i.clickElement('button:has-text("发布")');
     await Promise.race([

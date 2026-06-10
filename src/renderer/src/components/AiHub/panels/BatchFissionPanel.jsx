@@ -4,6 +4,7 @@ import {
   ArrowLeftRight, Sparkles, Megaphone, ImageIcon, X, Layers,
 } from 'lucide-react';
 import { useAiTasks } from '../AiTaskContext';
+import usePersistentState from '../../../hooks/usePersistentState';
 
 // ──────────────────────────────────────────────
 // 工具元数据配置表
@@ -43,14 +44,6 @@ const RENDER_STAGES = [
   '最终素材打包与色彩校准...',
 ];
 
-function usePersistentState(key, defaultValue) {
-  const [value, setValue] = useState(() => {
-    try { return window.localStorage.getItem(key) !== null ? JSON.parse(window.localStorage.getItem(key)) : defaultValue; }
-    catch (e) { return defaultValue; }
-  });
-  useEffect(() => { window.localStorage.setItem(key, JSON.stringify(value)); }, [key, value]);
-  return [value, setValue];
-}
 
 function usePersistentSetState(key, defaultSet) {
   const [value, setValue] = useState(() => {

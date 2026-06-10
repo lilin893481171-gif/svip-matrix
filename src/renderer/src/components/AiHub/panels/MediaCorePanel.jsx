@@ -1,15 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Layers, Loader2, CheckCircle2, Zap, Image as ImageIcon, Video, Settings2, Wand2, Scissors, UploadCloud, MonitorPlay, Smartphone, Download } from 'lucide-react';
 import AssetUploadBox from '../AssetUploadBox'; 
+import usePersistentState from '../../../hooks/usePersistentState';
 
-function usePersistentState(key, defaultValue) {
-  const [value, setValue] = useState(() => {
-    try { return window.localStorage.getItem(key) !== null ? JSON.parse(window.localStorage.getItem(key)) : defaultValue; } 
-    catch (e) { return defaultValue; }
-  });
-  useEffect(() => { window.localStorage.setItem(key, JSON.stringify(value)); }, [key, value]);
-  return [value, setValue];
-}
 
 export default function MediaCorePanel({ activeWorkspace, workspaceMeta }) {
   const [chatInput, setChatInput] = usePersistentState(`media_input_${activeWorkspace}`, '');

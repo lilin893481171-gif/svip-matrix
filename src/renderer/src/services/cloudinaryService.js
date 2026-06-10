@@ -1,6 +1,7 @@
-// Cloudinary 核心配置
-const CLOUDINARY_URL = `https://api.cloudinary.com/v1_1/dzu3jwkve/auto/upload`;
-const CLOUDINARY_PRESET = "cu5yy0rl"; 
+// Cloudinary 配置 (构建时注入环境变量)
+const CLOUDINARY_CLOUD = import.meta.env.VITE_CLOUDINARY_CLOUD;
+const CLOUDINARY_PRESET = import.meta.env.VITE_CLOUDINARY_PRESET;
+const CLOUDINARY_URL = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/auto/upload`;
 
 /**
  * 通用文件上传服务
@@ -9,6 +10,9 @@ const CLOUDINARY_PRESET = "cu5yy0rl";
  */
 export const uploadToCloudinary = async (file) => {
   if (!file) return { success: false, error: '未选择文件' };
+  if (!CLOUDINARY_CLOUD || !CLOUDINARY_PRESET) {
+    return { success: false, error: 'Cloudinary 配置缺失，请检查环境变量 VITE_CLOUDINARY_CLOUD / VITE_CLOUDINARY_PRESET' };
+  }
 
   const formData = new FormData();
   formData.append('file', file);

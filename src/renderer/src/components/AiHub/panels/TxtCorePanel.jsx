@@ -5,17 +5,8 @@ import {
 } from 'lucide-react';
 import { cfApiUrl, authHeaders } from '../../../config/matrixConfig';
 import { useAiTasks } from '../AiTaskContext';
+import usePersistentState from '../../../hooks/usePersistentState';
 
-function usePersistentState(key, defaultValue) {
-  const [value, setValue] = useState(() => {
-    try {
-      const item = window.localStorage.getItem(key);
-      return item !== null ? JSON.parse(item) : defaultValue;
-    } catch (e) { return defaultValue; }
-  });
-  useEffect(() => { window.localStorage.setItem(key, JSON.stringify(value)); }, [key, value]);
-  return [value, setValue];
-}
 
 // ===========================
 // 结构化工具配置表

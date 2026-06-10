@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   Command, Sparkles, Cpu, Image as ImageIcon, Film, Layout, Maximize, Clock, Settings, User, Music, Volume2, Mic, Radio, Box, Scissors, Smile, Wand2, Shirt, Users, Search, MessageSquare, FileText, Briefcase, Shield, Scale, Terminal, Code, BookOpen, ImagePlus, Palette, Activity, Grid, Camera, Video, Clapperboard, Globe, HeadphonesIcon, Zap, MousePointer, Layers, Store,
-  ShoppingBag, TrendingUp, Sun, Gamepad2, MonitorPlay, Megaphone, Rocket, Package, Monitor, PenTool,
+  ShoppingBag, TrendingUp, Sun, Gamepad2, MonitorPlay, Megaphone, Rocket, Package, Monitor, PenTool, Mail,
 } from 'lucide-react';
 
 // =====================================================================
@@ -147,4 +147,8 @@ export const AI_TOOLS_REGISTRY = [
       { id: 'ds_material_sim', name: '材质 & 质感模拟', desc: '一键切换塑料/金属/玻璃/木质/陶瓷/布料等物理材质渲染', icon: <Rocket size={20} />, type: 'image', template: '【材质质感智能模拟】\n[拖入产品设计图或线稿]\n目标材质：[高光金属 / 磨砂塑料 / 透明玻璃 / 天然木材 / 哑光陶瓷 / 丝绸布料]\n要求：真实物理级材质渲染 (PBR)，体现环境反射、表面粗糙度和次表面散射。' },
     ]
   },
+
+  // ═══════════════════════════════════════════════════════════
+  // (邮件总控已移至侧边栏直达标签)
+  // ═══════════════════════════════════════════════════════════
 ];

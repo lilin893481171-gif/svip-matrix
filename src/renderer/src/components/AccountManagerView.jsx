@@ -35,6 +35,7 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
 
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
+  const newGroupInputRef = useRef(null);
 
   const [isAccountListCollapsed, setIsAccountListCollapsed] = useState(() => {
     try { return JSON.parse(localStorage.getItem('account_list_collapsed') || 'false'); } catch { return false; }
@@ -90,6 +91,12 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
   const handleRefresh = () => {
     if (!activeTabId) return;
     electron.ipcRenderer.send('account-browser-reload', { accountId: String(activeTabId) });
+  };
+
+  // 打开内嵌浏览器的 DevTools
+  const handleOpenDevTools = () => {
+    if (!activeTabId) return;
+    electron.ipcRenderer.invoke('open-account-browser-devtools', String(activeTabId));
   };
 
   // 标签切换时自动吸附/分离 BrowserView
@@ -164,7 +171,7 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
     '快手': 'https://cp.kuaishou.com/profile',
     '微信视频号': 'https://channels.weixin.qq.com/platform',
     'B站': 'https://member.bilibili.com/platform/home',
-    '小红书': 'https://www.xiaohongshu.com',
+    '小红书': 'https://creator.xiaohongshu.com/new/home',
     '百家号': 'https://baijiahao.baidu.com/builder/rc/home',
     '知乎': 'https://www.zhihu.com/creator',
     '微博': 'https://me.weibo.com/',
@@ -224,6 +231,49 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
       }
     }
   }, [accounts]);
+
+  // ─── 入网嗅探回调：主进程提取到用户数据后推送 ───
+  useEffect(() => {
+    const handler = (_event, payload) => {
+      const { accountId, _status } = payload;
+      if (!accountId) return;
+
+      if (_status === 'started') {
+        setSniffingStatus(prev => ({ ...prev, [accountId]: '嗅探中' }));
+        return;
+      }
+
+      if (_status === 'login_detected') {
+        setSniffingStatus(prev => ({ ...prev, [accountId]: '已登录-提取中' }));
+        return;
+      }
+
+      // 数据入库完成或最终结算 → 刷新列表 + 更新标签页标题
+      if (_status === 'complete' || _status === 'finalized') {
+        const hasRealName = payload.real_name || payload.user_id;
+        const displayName = payload.real_name || payload.user_id || '';
+        setSniffingStatus(prev => ({
+          ...prev,
+          [accountId]: hasRealName ? '在线' : '在线(无数据)'
+        }));
+        // 更新浏览器标签页昵称
+        if (displayName) {
+          setBrowserTabs(prev => prev.map(t =>
+            String(t.accountId) === String(accountId) ? { ...t, alias: displayName } : t
+          ));
+        }
+        // 异步拉取最新账号列表
+        electron.ipcRenderer.invoke('db-get-accounts').then(fresh => {
+          if (fresh && fresh.length > 0) setAccounts(fresh);
+        }).catch(() => {});
+      }
+    };
+
+    electron.ipcRenderer.on('account-onboarding-data', handler);
+    return () => {
+      try { electron.ipcRenderer.removeAllListeners('account-onboarding-data'); } catch (e) { /* ignore */ }
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('nikola_custom_groups', JSON.stringify(customGroups));
@@ -353,7 +403,7 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
 
   const toggleGroup = (groupName) => setCollapsedGroups(prev => ({ ...prev, [groupName]: !prev[groupName] }));
   const submitNewGroup = () => {
-    const trimmed = newGroupName.trim();
+    const trimmed = (newGroupInputRef.current?.value || newGroupName || '').trim();
     if (trimmed) {
       if (trimmed === '默认分组' || customGroups.includes(trimmed)) return alert("分组名称已存在！");
       setCustomGroups([...customGroups, trimmed]);
@@ -401,14 +451,31 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
   const handleDelete = async (e, id) => {
     e.stopPropagation();
     if (!confirm("确定要永久删除此账号吗？")) return;
+
+    // 关闭对应的浏览器标签页
+    const idStr = String(id);
+    const existingTab = browserTabs.find(t => String(t.accountId) === idStr);
+    if (existingTab) {
+      electron.ipcRenderer.send('detach-account-browser', { accountId: idStr });
+      await electron.ipcRenderer.invoke('close-account-session', { accountId: idStr });
+      const newTabs = browserTabs.filter(t => String(t.accountId) !== idStr);
+      setBrowserTabs(newTabs);
+      if (String(activeTabId) === idStr) {
+        setActiveTabId(newTabs.length > 0 ? newTabs[0].accountId : null);
+      }
+    }
+
     await electron.ipcRenderer.invoke('db-delete-account', id);
     setAccounts(accounts.filter(a => a.id !== id));
   };
 
   const getStatusInfo = (id, defaultStatus) => {
     const status = sniffingStatus[id] || defaultStatus;
-    if (status === 'sniffing') return { color: 'bg-fuchsia-500', ping: true, isOffline: false, icon: <Loader2 size={8} className="animate-spin text-white"/> };
+    if (status === 'sniffing' || status === '嗅探中') return { color: 'bg-amber-500', ping: true, isOffline: false, icon: <Loader2 size={8} className="animate-spin text-white"/> };
+    if (status === '已登录-提取中') return { color: 'bg-cyan-500', ping: true, isOffline: false, icon: <Loader2 size={8} className="animate-spin text-white"/> };
     if (status === '在线') return { color: 'bg-emerald-500', ping: false, isOffline: false, icon: null };
+    if (status === '在线(无数据)') return { color: 'bg-amber-500', ping: false, isOffline: false, icon: null };
+    if (status === '登录失效' || status === '扫码超时') return { color: 'bg-rose-500', ping: false, isOffline: true, icon: <X size={8} className="text-white stroke-[3]"/> };
     return { color: 'bg-rose-500', ping: false, isOffline: true, icon: <X size={8} className="text-white stroke-[3]"/> };
   };
 
@@ -560,6 +627,7 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
                       
                       <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-white/95 backdrop-blur-sm p-1 rounded-lg shadow-md border border-slate-100 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
                          <button onClick={(e) => { e.stopPropagation(); setEditingTag({ id: acc.id, value: acc.alias }); }} className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition" title="修改名称"><Edit size={12} /></button>
+                         <button onClick={async (e) => { e.stopPropagation(); if (!confirm('⚠️ 确定要清除「' + (acc.real_name || acc.alias) + '」的会话数据吗？\n\n清除后需要重新扫码登录。')) return; const res = await electron.ipcRenderer.invoke('clear-account-session-data', { accountId: acc.id }); if (res.success) alert('✅ 会话数据已清除，请重新打开该账户扫码登录。'); }} className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-md transition" title="清除会话数据"><ShieldAlert size={12} /></button>
                          <button onClick={(e) => handleDelete(e, acc.id)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-md transition" title="删除账号"><Trash2 size={12} /></button>
                       </div>
                     </div>
@@ -637,6 +705,13 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
               title="刷新"
             >
               <RotateCw size={13} />
+            </button>
+            <button
+              onClick={handleOpenDevTools}
+              className="p-1 rounded text-slate-400 hover:text-amber-400 hover:bg-slate-700 transition"
+              title="打开此页面DevTools"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
             </button>
             <input
               type="text"
@@ -817,7 +892,7 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
               <button onClick={() => setShowGroupModal(false)} className="p-1 hover:bg-slate-200 rounded-md text-slate-500 transition"><X size={16} /></button>
             </div>
             <div className="p-5 space-y-4">
-              <input autoFocus className="w-full bg-slate-50 border border-slate-200 rounded-lg p-3 outline-none focus:border-indigo-500 font-bold text-slate-900 text-sm" placeholder="例如：游戏自媒体矩阵" value={newGroupName} onChange={e => setNewGroupName(e.value)} onKeyDown={(e) => { if(e.key === 'Enter') submitNewGroup(); }} />
+              <input ref={newGroupInputRef} autoFocus className="w-full bg-slate-50 border border-slate-200 rounded-lg p-3 outline-none focus:border-indigo-500 font-bold text-slate-900 text-sm" placeholder="例如：游戏自媒体矩阵" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter') submitNewGroup(); }} />
               <button onClick={submitNewGroup} className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-bold text-sm shadow-md hover:bg-indigo-700 transition">确认创建</button>
             </div>
           </div>

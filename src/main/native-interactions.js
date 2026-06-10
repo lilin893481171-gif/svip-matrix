@@ -53,8 +53,12 @@ const KEY_CODES = {
 // 2. 原生交互引擎
 // ==========================================
 export class NativeInteractions {
-  constructor(webContents) {
+  #_axEnabled;
+
+  constructor(webContents, mainWindow) {
     this.wc = webContents;
+    this._mainWindow = mainWindow;
+    this.#_axEnabled = false;
   }
 
   // ---------- 基础工具 ----------
@@ -270,38 +274,60 @@ export class NativeInteractions {
     const key = parts[1];      // e.g. 'A'
 
     const modDef = KEY_CODES[modifier] || { keyCode: modifier };
-    const modifiers = [modifier.toLowerCase()];
+    const modifierLower = modifier.toLowerCase();
+    const modifiers = [modifierLower];
 
     // 按下修饰键
-    this.wc.sendInputEvent({
-      type: 'keyDown', keyCode: modDef.keyCode,
-      windowsVirtualKeyCode: modDef.windowsVirtualKeyCode, modifiers
-    });
+    const downEvent = {
+      type: 'keyDown',
+      keyCode: modDef.keyCode,
+      modifiers
+    };
+    if (modDef.windowsVirtualKeyCode) {
+      downEvent.windowsVirtualKeyCode = modDef.windowsVirtualKeyCode;
+    }
+    this.wc.sendInputEvent(downEvent);
     await sleep(10);
 
     if (key) {
       const keyDef = KEY_CODES[key] || { keyCode: key };
-      this.wc.sendInputEvent({
-        type: 'keyDown', keyCode: keyDef.keyCode,
-        windowsVirtualKeyCode: keyDef.windowsVirtualKeyCode, modifiers
-      });
+      const keyDownEvent = {
+        type: 'keyDown',
+        keyCode: keyDef.keyCode,
+        modifiers
+      };
+      if (keyDef.windowsVirtualKeyCode) {
+        keyDownEvent.windowsVirtualKeyCode = keyDef.windowsVirtualKeyCode;
+      }
+      this.wc.sendInputEvent(keyDownEvent);
       await sleep(20 + Math.random() * 20);
-      this.wc.sendInputEvent({
-        type: 'keyUp', keyCode: keyDef.keyCode,
-        windowsVirtualKeyCode: keyDef.windowsVirtualKeyCode, modifiers
-      });
+
+      const keyUpEvent = {
+        type: 'keyUp',
+        keyCode: keyDef.keyCode,
+        modifiers
+      };
+      if (keyDef.windowsVirtualKeyCode) {
+        keyUpEvent.windowsVirtualKeyCode = keyDef.windowsVirtualKeyCode;
+      }
+      this.wc.sendInputEvent(keyUpEvent);
     }
 
     // 释放修饰键
-    this.wc.sendInputEvent({
-      type: 'keyUp', keyCode: modDef.keyCode,
-      windowsVirtualKeyCode: modDef.windowsVirtualKeyCode
-    });
+    const upEvent = { type: 'keyUp', keyCode: modDef.keyCode, modifiers };
+    if (modDef.windowsVirtualKeyCode) {
+      upEvent.windowsVirtualKeyCode = modDef.windowsVirtualKeyCode;
+    }
+    this.wc.sendInputEvent(upEvent);
   }
+
+  // ---------- 文本输入 ----------
 
   /**
    * 逐字符输入文本（高斯延时 + 随机错误 + 回删 + 思考停顿）
    * 为每个矩阵账号生成独立的打字节奏（WPM），不同账号不同"手感"
+   * ASCII 用 sendInputEvent + keyChar，CJK 用 CDP Input.insertText
+   * （sendInputEvent 的 keyChar 不支持多字节 CJK 字符，Electron 会抛 Invalid event object）
    * @param {string} text - 要输入的文本
    * @param {object} opts - { delay: 基础延时, wpm: 打字速度(字/分钟, 默认40-70随机), typoRate: 错误率 }
    */
@@ -312,6 +338,17 @@ export class NativeInteractions {
     const meanDelay = 60000 / wpm;  // 平均每字延时 (ms)
     const stddev = meanDelay * 0.35; // 30-40% 标准差 → 自然节奏变化
     const typoRate = opts.typoRate ?? (0.02 + Math.random() * 0.03); // 2-5%
+
+    let inputEnabled = false;
+    const ensureInput = async () => {
+      if (inputEnabled) return;
+      if (this.wc.debugger.isAttached()) {
+        try {
+          await this.wc.debugger.sendCommand('Input.enable');
+          inputEnabled = true;
+        } catch (_) {}
+      }
+    };
 
     for (let i = 0; i < text.length; i++) {
       const char = text[i];
@@ -328,9 +365,20 @@ export class NativeInteractions {
       }
 
       if (isCJK) {
-        this.wc.sendInputEvent({ type: 'keyDown', keyCode: char });
-        this.wc.sendInputEvent({ type: 'char', keyChar: char });
-        this.wc.sendInputEvent({ type: 'keyUp', keyCode: char });
+        await ensureInput();
+        if (inputEnabled) {
+          await this.wc.debugger.sendCommand('Input.insertText', { text: char });
+        } else {
+          // 最终回退：execCommand (deprecated but widely supported)
+          await this.wc.executeJavaScript(`
+            (() => {
+              const el = document.activeElement;
+              if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+                document.execCommand('insertText', false, ${JSON.stringify(char)});
+              }
+            })()
+          `);
+        }
       } else {
         this.wc.sendInputEvent({ type: 'char', keyChar: char });
       }
@@ -447,6 +495,7 @@ export class NativeInteractions {
             return txt.length < 200 && pattern.test(txt);
           });
           if (!el) return null;
+          el.scrollIntoView({ block: 'center', behavior: 'instant' });
           const r = el.getBoundingClientRect();
           return { x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height, tag: el.tagName, text: (el.textContent||'').trim().substring(0, 50) };
         })()
@@ -457,11 +506,33 @@ export class NativeInteractions {
   }
 
   /**
-   * 执行任意 JavaScript 并返回结果
+   * 执行任意 JavaScript 并返回结果 (带 CDP 降级护盾)
    */
   async evaluate(jsCode) {
     this.#checkAlive();
-    return this.wc.executeJavaScript(jsCode);
+    try {
+      return await this.wc.executeJavaScript(jsCode);
+    } catch (e) {
+      console.warn('🛡️ [NativeInteractions] IPC 拦截到异常:', e.message);
+
+      // 👑 终极降级：尝试绕过 IPC，使用 CDP 协议直接在 V8 引擎中执行代码
+      if (this.wc.debugger && this.wc.debugger.isAttached()) {
+        try {
+          const res = await this.wc.debugger.sendCommand('Runtime.evaluate', {
+            expression: jsCode,
+            returnByValue: true,    // 强制返回 JSON 序列化的值
+            awaitPromise: true      // 支持异步代码
+          });
+          if (res && res.result && res.result.value !== undefined) {
+            console.log('🛡️ [NativeInteractions] CDP 降级执行成功！救回一条命。');
+            return res.result.value;
+          }
+        } catch (cdpErr) {
+          console.warn('🛡️ [NativeInteractions] CDP 降级亦失败 (页面可能已死锁):', cdpErr.message);
+        }
+      }
+      return null;
+    }
   }
 
   // ---------- 高级交互 ----------
@@ -570,15 +641,13 @@ export class NativeInteractions {
   async humanType(cssSelector, text) {
     if (!text) return;
     await this.humanMouseMove(cssSelector);
-    await this.clickElement(cssSelector); // 先点击聚焦
-    await sleep(200);
-
-    // Ctrl+A 全选 + Backspace 清空
+    await this.clickElement(cssSelector);
+    await sleep(300);
     await this.pressCombo('Control+A');
     await this.pressKey('Backspace');
     await sleep(300);
-
-    await this.typeText(text);
+    // 统一用 CDP insertText（兼容 contenteditable/ProseMirror，sendInputEvent char 在 SPA 上不稳定）
+    await this.insertTextViaCDP(text);
   }
 
   /**
@@ -671,112 +740,700 @@ export class NativeInteractions {
   // ---------- 文件上传 ----------
 
   /**
-   * 设置文件输入（使用 debugger CDP 命令）
+   * 检查页面是否已有 file input（上传区通常挂着一个隐藏的）
    */
-  async setFileInput(filePath) {
-    this.#checkAlive();
-    // 确保 debugger 已附加
+  async #findFileInputNode() {
+    const doc = await this.wc.debugger.sendCommand('DOM.getDocument', { depth: -1 });
+    const find = (node) => {
+      if (!node) return null;
+      if (node.nodeName === 'INPUT' && node.attributes) {
+        const typeIdx = node.attributes.indexOf('type');
+        if (typeIdx >= 0 && node.attributes[typeIdx + 1] === 'file') return node;
+      }
+      if (node.children) {
+        for (const child of node.children) {
+          const found = find(child);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    return find(doc.root) || null;
+  }
+
+  /**
+   * CDP 直注 — 页面已有 input[type="file"] 时直接用。
+   * AI_MEMORY_BANK #10: blur → 0.9-2.7s 延时 → setFileInputFiles → focus 恢复
+   */
+  async #directFileInject(filePath, fileInputNode) {
+    await this.wc.executeJavaScript(`
+      window.dispatchEvent(new Event('blur'));
+      document.hasFocus = () => false;
+      0
+    `);
+    await sleep(900 + Math.random() * 1800);
+
+    await this.wc.debugger.sendCommand('DOM.setFileInputFiles', {
+      nodeId: fileInputNode.nodeId,
+      files: [filePath]
+    });
+
+    await sleep(500);
+
+    await this.wc.executeJavaScript(`
+      (() => {
+        const el = document.querySelector('input[type="file"]');
+        if (el) {
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        window.dispatchEvent(new Event('focus'));
+        delete document.hasFocus;
+      })()
+    `);
+    try { this.wc.focus(); } catch (_) {}
+    console.log('[直注] ✅ 文件注入成功');
+    return true;
+  }
+
+  /**
+   * 统一文件上传：MutationObserver 预捕 + OS 级 ESC 连发 + CDP 注入。
+   *
+   * 设计理念：接受 Electron 无法在 JS 层完全阻止文件对话框的现实。
+   * 点击上传按钮前就启动 ESC 连发（PowerShell 后台），对话框弹出瞬间即被关闭。
+   * MutationObserver 在 file input 被创建的瞬间捕获引用，无需等待 JS 拦截生效。
+   *
+   * 时序：
+   *   PowerShell 启动 → [200ms] → ESC×5 (间隔50ms)
+   *   安装 MutationObserver + 原型补丁
+   *   点击上传按钮
+   *   对话框弹出 → ~200ms内被 ESC 关闭 → 对话框消失
+   *   轮询 DOM 找到 file input → CDP 注入 → 触发 change
+   */
+  async #uploadFileViaJSIntercept(filePath, uploadBtnBox) {
     if (!this.wc.debugger.isAttached()) {
       this.wc.debugger.attach('1.3');
     }
 
-    try {
-      // 获取文档根节点
-      const doc = await this.wc.debugger.sendCommand('DOM.getDocument', { depth: -1 });
+    const refKey = `__m_${Date.now().toString(36)}`;
 
-      // 递归查找 input[type="file"] 节点
-      const findFileInput = (node) => {
+    // ===== 启动 OS 级 ESC 连发（在点击之前启动，争取最短关闭时间） =====
+    console.warn('⚠️ [安全警告] #uploadFileViaJSIntercept: PowerShell SendKeys 将向系统前台发送 ESC 键！仅用于关闭原生文件对话框。');
+    const { exec } = await import('node:child_process');
+    const isWin = process.platform === 'win32';
+    const escPromise = new Promise((resolve) => {
+      if (isWin) {
+        exec(
+          `powershell -NoProfile -Command "Start-Sleep -Milliseconds 200; $ws=New-Object -ComObject WScript.Shell; 1..5|%{Start-Sleep -Milliseconds 50;$ws.SendKeys('{ESC}')}"`,
+          { timeout: 3000, windowsHide: true },
+          () => resolve()
+        );
+      } else {
+        // macOS/Linux: no reliable OS-level keystroke injection without
+        // Accessibility permissions. Rely on prototype patching + CDP intercept.
+        setTimeout(() => resolve(), 500);
+      }
+    });
+
+    // ===== 安装 MutationObserver + 原型补丁 (在点击之前) =====
+    await this.wc.executeJavaScript(`
+      (() => {
+        if (window.__m_upload_ready__) return;
+        window.__m_upload_ready__ = true;
+        window.__m_fi__ = null;
+
+        // MutationObserver: 捕获动态创建的 file input
+        window['${refKey}_mo'] = new MutationObserver(function(records) {
+          for (var r = 0; r < records.length; r++) {
+            var nodes = records[r].addedNodes;
+            for (var i = 0; i < nodes.length; i++) {
+              var n = nodes[i];
+              if (n.nodeType !== 1) continue;
+              if (n.tagName === 'INPUT' && n.type === 'file') {
+                window.__m_fi__ = n;
+                // 阻断这个元素的原生 click
+                var oc = n.click;
+                n.click = function(){ window.__m_fi__ = this; };
+              }
+              if (n.querySelectorAll) {
+                var fis = n.querySelectorAll('input[type="file"]');
+                for (var j = 0; j < fis.length; j++) {
+                  window.__m_fi__ = fis[j];
+                  var oc2 = fis[j].click;
+                  fis[j].click = function(){ window.__m_fi__ = this; };
+                }
+              }
+            }
+          }
+        });
+        window['${refKey}_mo'].observe(document.documentElement, { childList: true, subtree: true });
+
+        // 原型补丁 click()
+        window['${refKey}_oc'] = HTMLInputElement.prototype.click;
+        HTMLInputElement.prototype.click = function() {
+          if (this.type === 'file' && !window.__m_file_done__) {
+            window.__m_fi__ = this; return;
+          }
+          return window['${refKey}_oc'].call(this);
+        };
+
+        // 原型补丁 showPicker()
+        if (HTMLInputElement.prototype.showPicker) {
+          window['${refKey}_osp'] = HTMLInputElement.prototype.showPicker;
+          HTMLInputElement.prototype.showPicker = function() {
+            if (this.type === 'file' && !window.__m_file_done__) {
+              window.__m_fi__ = this; return Promise.resolve();
+            }
+            return window['${refKey}_osp'].call(this);
+          };
+        }
+
+        // 扫描页面中已存在的 file input
+        var existing = document.querySelectorAll('input[type="file"]');
+        for (var k = 0; k < existing.length; k++) {
+          var oc3 = existing[k].click;
+          existing[k].click = function(){ window.__m_fi__ = this; };
+        }
+      })()
+    `);
+    await sleep(100);
+
+    // ===== 点击上传按钮 =====
+    const cx = uploadBtnBox.x + uploadBtnBox.width * 0.5;
+    const cy = uploadBtnBox.y + uploadBtnBox.height * 0.5;
+    await this.humanMouseMoveByBox(uploadBtnBox);
+    await this.mouseClick(cx, cy, 60 + Math.random() * 50);
+    await this.mouseMove(cx + (Math.random() - 0.5) * 200, cy + (Math.random() - 0.5) * 150);
+
+    // ===== 等待 ESC 连发完成（对话框已被关闭） =====
+    await escPromise;
+    console.log('[Upload] ESC 连发完成，对话框应已关闭');
+
+    // ===== 在 DOM 中找 file input =====
+    let fileInputNode = null;
+
+    // 先检查 MutationObserver / 拦截器是否捕获了
+    const captured = await this.wc.executeJavaScript(`
+      (() => {
+        var el = window.__m_fi__;
+        if (!el || el.type !== 'file') return null;
+        return { id: el.id || '', name: el.name || '' };
+      })()
+    `);
+
+    if (captured) {
+      const doc = await this.wc.debugger.sendCommand('DOM.getDocument', { depth: -1 });
+      const findNode = (node) => {
         if (!node) return null;
         if (node.nodeName === 'INPUT' && node.attributes) {
-          const type = node.attributes.find(a => a === 'type');
-          const typeVal = node.attributes[node.attributes.indexOf('type') + 1];
-          if (typeVal === 'file') return node;
+          const ti = node.attributes.indexOf('type');
+          const ii = node.attributes.indexOf('id');
+          if (ti >= 0 && node.attributes[ti + 1] === 'file') {
+            if (captured.id && ii >= 0 && node.attributes[ii + 1] === captured.id) return node;
+            if (!captured.id) return node;
+          }
         }
         if (node.children) {
-          for (const child of node.children) {
-            const found = findFileInput(child);
-            if (found) return found;
-          }
+          for (const c of node.children) { const f = findNode(c); if (f) return f; }
         }
         return null;
       };
+      fileInputNode = findNode(doc.root);
+    }
 
-      const fileInputNode = findFileInput(doc.root);
-      if (!fileInputNode) return false;
+    // 回退：直接扫 DOM
+    if (!fileInputNode) {
+      for (let i = 0; i < 15; i++) {
+        await sleep(200);
+        fileInputNode = await this.#findFileInputNode();
+        if (fileInputNode) break;
+      }
+    }
 
-      await this.wc.debugger.sendCommand('DOM.setFileInputFiles', {
-        nodeId: fileInputNode.nodeId,
-        files: [filePath]
-      });
-      await sleep(2000);
-      return true;
-    } catch (e) {
-      console.warn('[NativeInteractions] setFileInput failed:', e.message);
+    // ===== 清理 =====
+    await this.wc.executeJavaScript(`
+      (() => {
+        var ck = '${refKey}';
+        if (window[ck + '_mo']) { window[ck + '_mo'].disconnect(); delete window[ck + '_mo']; }
+        if (window[ck + '_oc']) { HTMLInputElement.prototype.click = window[ck + '_oc']; delete window[ck + '_oc']; }
+        if (window[ck + '_osp']) { HTMLInputElement.prototype.showPicker = window[ck + '_osp']; delete window[ck + '_osp']; }
+        window.__m_fi__ = null;
+        window.__m_upload_ready__ = false;
+      })()
+    `);
+
+    if (!fileInputNode) {
+      console.error('[Upload] 未找到 file input（对话框可能已被 ESC 关闭但 input 不存在）');
       return false;
     }
+
+    // ===== CDP 注入文件 =====
+    await this.wc.executeJavaScript(`
+      window.dispatchEvent(new Event('blur'));
+      document.hasFocus = () => false;
+      0
+    `);
+    await sleep(900 + Math.random() * 1800);
+
+    await this.wc.debugger.sendCommand('DOM.setFileInputFiles', {
+      nodeId: fileInputNode.nodeId,
+      files: [filePath]
+    });
+
+    await sleep(500);
+
+    await this.wc.executeJavaScript(`
+      (() => {
+        var el = document.querySelector('input[type="file"]');
+        if (el) {
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        window.__m_file_done__ = true;
+        window.dispatchEvent(new Event('focus'));
+        delete document.hasFocus;
+      })()
+    `);
+    try { this.wc.focus(); } catch (_) {}
+    console.log('[Upload] ✅ 文件注入成功');
+    return true;
   }
 
   /**
-   * 安全上传：先尝试直接设置文件输入，失败则通过点击上传按钮 + debugger 注入
+   * 唯一上传入口
    */
   async safeUpload(videoPath, backupLocatorTexts = ['上传视频', '点击上传', '上传', '选择文件']) {
     this.#checkAlive();
-
-    // 策略 A：直接用 debugger 设置 input[type="file"]
-    const directResult = await this.setFileInput(videoPath);
-    if (directResult) return true;
-
-    // 策略 B：找到上传按钮点击 → 等待文件选择器
-    // Electron 没有 filechooser 事件，所以改用 dialog + 注入的方式
-    for (const text of backupLocatorTexts) {
-      try {
-        const box = await this.getElementByText([text]);
-        if (box) {
-          const cx = box.x + box.width * 0.5;
-          const cy = box.y + box.height * 0.5;
-
-          // 先将一个隐藏的文件输入插入到 DOM
-          await this.wc.executeJavaScript(`
-            (() => {
-              if (window.__matrix_upload_input__) return;
-              const input = document.createElement('input');
-              input.type = 'file';
-              input.style.position = 'fixed';
-              input.style.left = '-9999px';
-              input.style.top = '-9999px';
-              input.id = '__matrix_upload_input__';
-              document.body.appendChild(input);
-              window.__matrix_upload_input__ = input;
-            })()
-          `);
-          await sleep(500);
-
-          // 通过 debugger 设置文件并触发 change
-          const doc = await this.wc.debugger.sendCommand('DOM.getDocument', { depth: -1 });
-          const findById = (node, id) => {
-            if (!node) return null;
-            if (node.attributes) {
-              const idIdx = node.attributes.indexOf('id');
-              if (idIdx >= 0 && node.attributes[idIdx + 1] === id) return node;
-            }
-            if (node.children) {
-              for (const c of node.children) { const f = findById(c, id); if (f) return f; }
-            }
-            return null;
-          };
-          const inputNode = findById(doc.root, '__matrix_upload_input__');
-          if (inputNode) {
-            await this.wc.debugger.sendCommand('DOM.setFileInputFiles', {
-              nodeId: inputNode.nodeId, files: [videoPath]
-            });
-            await sleep(3000);
-            return true;
-          }
-        }
-      } catch (e) { /* 继续尝试下一个 */ }
+    if (!this.wc.debugger.isAttached()) {
+      this.wc.debugger.attach('1.3');
     }
 
-    throw new Error('上传阻断：找不到上传入口。');
+    for (const text of backupLocatorTexts) {
+      const box = await this.getElementByText([text]);
+      if (!box) continue;
+      try {
+        const result = await this.#uploadFileViaJSIntercept(videoPath, box);
+        if (result) return true;
+      } catch (e) {
+        console.warn(`[safeUpload] "${text}" 失败:`, e.message);
+      }
+    }
+
+    const existingInput = await this.#findFileInputNode();
+    if (existingInput) {
+      try {
+        const result = await this.#directFileInject(videoPath, existingInput);
+        if (result) return true;
+      } catch (e) {
+        console.warn('[safeUpload] 直注失败:', e.message);
+      }
+    }
+
+    throw new Error('上传阻断：所有策略均失败。');
+  }
+
+  /**
+   * @deprecated 请使用 safeUpload
+   */
+  async setFileInput(filePath, opts = {}) {
+    return this.safeUpload(filePath, opts.backupLocatorTexts);
+  }
+
+  /**
+   * 🛡️ 智能文件注入 — 优先 OS 级原生对话框（isTrusted=true），失败则降级 CDP 直注。
+   * @param {string} filePath - 文件路径
+   * @param {object} opts - 同 injectFileDirect 的 opts
+   * @returns {boolean} 是否成功
+   */
+  async smartInjectFile(filePath, opts = {}) {
+    this.#checkAlive();
+
+    // P0: 尝试 OS 级原生文件对话框（isTrusted=true，平台无法检测）
+    try {
+      console.log('[SmartInject] 🛡️ 尝试 OS 级文件注入...');
+      const nativeOk = await this.injectFileViaNativeDialog(filePath);
+      if (nativeOk) {
+        console.log('[SmartInject] ✅ OS 级注入成功 (isTrusted=true)');
+        return true;
+      }
+      console.log('[SmartInject] ⚠️ OS 级注入未成功，降级 CDP...');
+    } catch (e) {
+      console.warn('[SmartInject] OS 级注入异常，降级 CDP:', e.message);
+    }
+
+    // Fallback: CDP 直注（isTrusted=false，但兼容性好）
+    try {
+      const cdpOk = await this.injectFileDirect(filePath, opts);
+      if (cdpOk) {
+        console.log('[SmartInject] ✅ CDP 降级注入成功');
+        return true;
+      }
+    } catch (e) {
+      console.warn('[SmartInject] CDP 注入也失败:', e.message);
+    }
+
+    console.error('[SmartInject] ❌ 所有注入策略均失败');
+    return false;
+  }
+
+  /**
+   * 🆕 直注文件 — JS querySelectorAll 找 input[type="file"] → 打 marker → CDP 精准定位 nodeId → 注入
+   *
+   * 🔴 零点击、零弹框。JS 搜索穿透 Shadow DOM，CDP 仅用于 setFileInputFiles。
+   *
+   * @param {string} filePath - 文件路径（纯字符串，禁止对象/数组）
+   * @param {object} opts
+   * @param {boolean} opts.pickLast - true=取最后一个 input（弹窗内新建的）, false=取第一个（主页面视频区）
+   * @param {string[]} opts.contextKeywords - 按容器上下文文字筛选 file input（如 ['封面', 'cover']）
+   * @returns {boolean} 是否成功
+   */
+  async injectFileDirect(filePath, { pickLast = true, containerSelector = null, contextKeywords = null } = {}) {
+    this.#checkAlive();
+    if (!this.wc.debugger.isAttached()) {
+      this.wc.debugger.attach('1.3');
+    }
+
+    // 🔴 防御：filePath 必须是纯字符串
+    const cleanPath = String(filePath).trim();
+    const marker = 'mx' + Date.now().toString(36);
+
+    // Step 1: JS 搜 file input，打标记
+    const selectorArg = containerSelector ? JSON.stringify(containerSelector) : 'null';
+    const keywordsArg = contextKeywords ? JSON.stringify(contextKeywords) : 'null';
+    const count = await this.wc.executeJavaScript(`
+      (() => {
+        var selector = ${selectorArg};
+        var inputs;
+        if (selector) {
+          var container = document.querySelector(selector);
+          if (!container) return 0;
+          inputs = container.querySelectorAll('input[type="file"]');
+        } else {
+          inputs = document.querySelectorAll('input[type="file"]');
+        }
+        if (inputs.length === 0) return 0;
+
+        var keywords = ${keywordsArg};
+        var targetIdx = -1;
+        if (keywords && keywords.length > 0) {
+          // 按容器上下文文字筛选：向上遍历 5 级父节点，检查 innerText 是否命中关键词
+          for (var i = 0; i < inputs.length; i++) {
+            var el = inputs[i];
+            for (var depth = 0; depth < 5 && el; depth++) {
+              var txt = (el.innerText || el.textContent || '').toLowerCase();
+              for (var k = 0; k < keywords.length; k++) {
+                if (txt.indexOf(keywords[k].toLowerCase()) >= 0) {
+                  targetIdx = i;
+                  break;
+                }
+              }
+              if (targetIdx >= 0) break;
+              el = el.parentElement;
+            }
+            if (targetIdx >= 0) break;
+          }
+        }
+        if (targetIdx < 0) {
+          targetIdx = ${pickLast} ? inputs.length - 1 : 0;
+        }
+        inputs[targetIdx].setAttribute('data-mx', '${marker}');
+        return inputs.length;
+      })()
+    `);
+
+    if (!count) {
+      console.warn('[injectFileDirect] 页面无 file input');
+      return false;
+    }
+
+    // Step 2: CDP DOM 搜标记 → 拿 nodeId（确保整数）
+    const doc = await this.wc.debugger.sendCommand('DOM.getDocument', { depth: -1 });
+    let rawNodeId = null;
+    const search = (node) => {
+      if (!node || rawNodeId != null) return;
+      if (node.attributes) {
+        for (let i = 0; i < node.attributes.length - 1; i += 2) {
+          if (node.attributes[i] === 'data-mx' && node.attributes[i + 1] === marker) {
+            rawNodeId = node.nodeId;
+            return;
+          }
+        }
+      }
+      if (node.children) node.children.forEach(search);
+    };
+    search(doc.root);
+
+    if (rawNodeId == null) {
+      // 清理标记
+      await this.wc.executeJavaScript(`document.querySelector('[data-mx="${marker}"]')?.removeAttribute('data-mx')`).catch(() => {});
+      console.warn('[injectFileDirect] CDP DOM 中未找到标记元素');
+      return false;
+    }
+    const nodeId = parseInt(rawNodeId, 10);
+    console.log('[injectFileDirect] 定位到 file input, nodeId:', nodeId, 'count:', count, 'pickLast:', pickLast);
+
+    // Step 3: blur → 延时 → CDP 注入 → 派发 change/input → 清理标记
+    try {
+      await this.wc.executeJavaScript(`
+        window.dispatchEvent(new Event('blur'));
+        document.hasFocus = () => false;
+        0
+      `);
+      await sleep(900 + Math.random() * 800);
+
+      console.log('[injectFileDirect] 执行 DOM.setFileInputFiles nodeId=' + nodeId + ' file=' + cleanPath);
+      await this.wc.debugger.sendCommand('DOM.setFileInputFiles', {
+        nodeId,
+        files: [cleanPath]
+      });
+
+      await sleep(400);
+
+      // 👑 工业级唤醒：重建完美 File 对象 + 【全局防弹窗死锁防线】
+      await this.wc.executeJavaScript(`
+        (() => {
+          // ==========================================
+          // 🛡️ 1. 绝对防线：没收系统文件对话框的弹出权限
+          // 防止主线程被原生 UI 挂起，防止注入的文件被用户的"取消"操作覆盖
+          // ==========================================
+          const originalClick = HTMLInputElement.prototype.click;
+          HTMLInputElement.prototype.click = function() {
+            if (this.type === 'file') {
+              console.log('🛡️ [Native] 已拦截并粉碎了一次企图弹出文件筐的系统调用！');
+              return; // 直接吃掉点击事件，不弹窗！
+            }
+            originalClick.call(this);
+          };
+
+          // 拦截基于原生 File System Access API 的弹窗
+          window.showOpenFilePicker = async () => {
+            console.log('🛡️ [Native] 已拦截 showOpenFilePicker');
+            return [];
+          };
+
+          // ==========================================
+          // 📦 2. 提取并修复 CDP 注入的文件
+          // ==========================================
+          const fileInput = document.querySelector('[data-mx="${marker}"]');
+          if (!fileInput || fileInput.files.length === 0) return;
+
+          console.log('[Native] 提取原始文件句柄...');
+          const originalFile = fileInput.files[0];
+
+          let ext = originalFile.name.split('.').pop().toLowerCase();
+          let mimeType = originalFile.type;
+          if (!mimeType) {
+            if (ext === 'mov') mimeType = 'video/quicktime';
+            else if (ext === 'mp4') mimeType = 'video/mp4';
+            else mimeType = 'video/mp4';
+          }
+
+          const perfectFile = new File([originalFile], originalFile.name, {
+            type: mimeType,
+            lastModified: originalFile.lastModified || Date.now()
+          });
+
+          const dt = new DataTransfer();
+          dt.items.add(perfectFile);
+          fileInput.files = dt.files;
+
+          // ==========================================
+          // 🚀 3. 唤醒 React 状态机
+          // ==========================================
+          // 派发 input 和 change
+          fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+          fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+          // 派发 Drop
+          const dropZone = fileInput.closest('.upload-zone, .upload-container, .upload-wrapper') || fileInput.parentElement;
+          if (dropZone) {
+            const dropEvent = new DragEvent('drop', {
+              bubbles: true,
+              cancelable: true,
+              dataTransfer: dt
+            });
+            dropZone.dispatchEvent(dropEvent);
+            console.log('[Native] 完美的 Drop 事件派发完成，上传流已安全启动！');
+          }
+        })();
+      `);
+
+      console.log('[injectFileDirect] 完美 File 重建 + 防弹窗锁死 + 事件派发完成, marker:', marker);
+
+      // 最后清理 marker
+      await this.wc.executeJavaScript(`document.querySelector('[data-mx="${marker}"]')?.removeAttribute('data-mx')`).catch(() => {});
+
+      await this.wc.executeJavaScript(`
+        window.dispatchEvent(new Event('focus'));
+        delete document.hasFocus;
+        0
+      `);
+      try { this.wc.focus(); } catch (_) {}
+    } catch (e) {
+      console.error('[injectFileDirect] 注入失败:', e.message);
+      try {
+        await this.wc.executeJavaScript(`
+          window.dispatchEvent(new Event('focus'));
+          delete document.hasFocus;
+          0
+        `);
+      } catch (_) {}
+      return false;
+    }
+
+    console.log('[injectFileDirect] ✅ 文件注入成功');
+    return true;
+  }
+
+  /**
+   * 🆕 clickedFileInject — 点击触发按钮 → capture-phase 拦截阻止原生对话框 → marker → CDP 直注
+   *
+   * 彻底消除文件对话框弹窗。在 click 事件捕获阶段 preventDefault + stopPropagation，
+   * 原生文件选择器根本不会打开。同时给被点击触发的 file input 打 marker，后续精准注入。
+   *
+   * 用于弹窗场景（封面设置），不依赖 PowerShell / ESC / MutationObserver。
+   *
+   * @param {string} triggerText - 触发按钮的可见文案（如 "上传封面"）
+   * @param {string} filePath
+   * @returns {boolean}
+   */
+  async clickedFileInject(triggerText, filePath) {
+    this.#checkAlive();
+    if (!this.wc.debugger.isAttached()) {
+      this.wc.debugger.attach('1.3');
+    }
+
+    const cleanPath = String(filePath).trim();
+    const marker = 'mx' + Date.now().toString(36);
+
+    // Step 1: 安装 capture-phase click 拦截器
+    // 在事件到达 file input / label 之前就拦截，原生对话框永不出现
+    await this.wc.executeJavaScript(`
+      (() => {
+        window['${marker}_fn'] = function(e) {
+          const t = e.target;
+          // case 1: 直接点击了 <input type="file">
+          if (t.tagName === 'INPUT' && t.type === 'file') {
+            e.preventDefault();
+            e.stopPropagation();
+            t.setAttribute('data-mx', '${marker}');
+            window['${marker}_ok'] = true;
+            return;
+          }
+          // case 2: 点击了 <label for="fileInput"> — 找关联的 input
+          if (t.tagName === 'LABEL') {
+            const input = t.htmlFor ? document.getElementById(t.htmlFor) : t.querySelector('input[type="file"]');
+            if (input && input.type === 'file') {
+              e.preventDefault();
+              e.stopPropagation();
+              input.setAttribute('data-mx', '${marker}');
+              window['${marker}_ok'] = true;
+              return;
+            }
+          }
+          // case 3: 点击了包含 file input 的容器
+          const child = t.querySelector('input[type="file"]');
+          if (child) {
+            e.preventDefault();
+            e.stopPropagation();
+            child.setAttribute('data-mx', '${marker}');
+            window['${marker}_ok'] = true;
+            return;
+          }
+        };
+        document.addEventListener('click', window['${marker}_fn'], true);
+        window['${marker}_ok'] = false;
+      })()
+    `);
+
+    // Step 2: 点击触发按钮
+    await this.humanClickByText(triggerText);
+    await sleep(500);
+
+    // 如果 humanClickByText 没命中，用 flexibleClick 兜底
+    const intercepted = await this.wc.executeJavaScript(`window['${marker}_ok']`);
+    if (!intercepted) {
+      await this.flexibleClick([triggerText], 1000);
+      await sleep(300);
+    }
+
+    // Step 3: 检查是否拦截成功
+    const confirmed = await this.wc.executeJavaScript(`!!window['${marker}_ok']`);
+
+    // Step 4: 清除拦截器
+    await this.wc.executeJavaScript(`
+      (() => {
+        document.removeEventListener('click', window['${marker}_fn'], true);
+        delete window['${marker}_fn'];
+        delete window['${marker}_ok'];
+      })()
+    `);
+
+    if (!confirmed) {
+      console.warn('[clickedFileInject] 拦截未触发，回退 safeUpload');
+      return this.safeUpload(filePath, [triggerText, '上传']);
+    }
+
+    // Step 5: CDP 找 marker → nodeId → 注入
+    const doc = await this.wc.debugger.sendCommand('DOM.getDocument', { depth: -1 });
+    let rawNodeId = null;
+    const search = (node) => {
+      if (!node || rawNodeId != null) return;
+      if (node.attributes) {
+        for (let i = 0; i < node.attributes.length - 1; i += 2) {
+          if (node.attributes[i] === 'data-mx' && node.attributes[i + 1] === marker) {
+            rawNodeId = node.nodeId;
+            return;
+          }
+        }
+      }
+      if (node.children) node.children.forEach(search);
+    };
+    search(doc.root);
+
+    if (rawNodeId == null) {
+      console.warn('[clickedFileInject] marker 在 CDP DOM 中未找到');
+      await this.wc.executeJavaScript(`document.querySelector('[data-mx="${marker}"]')?.removeAttribute('data-mx')`).catch(() => {});
+      return false;
+    }
+    const nodeId = parseInt(rawNodeId, 10);
+    console.log('[clickedFileInject] 拦截成功, nodeId:', nodeId);
+
+    // Step 6: blur → 注入 → change → 清理 → focus
+    try {
+      await this.wc.executeJavaScript(`window.dispatchEvent(new Event('blur')); document.hasFocus = () => false; 0`);
+      await sleep(500);
+
+      await this.wc.debugger.sendCommand('DOM.setFileInputFiles', { nodeId, files: [cleanPath] });
+      await sleep(300);
+
+      // 精准派发 change 到被标记的 input
+      const dispatched = await this.wc.executeJavaScript(`
+        (() => {
+          const el = document.querySelector('[data-mx="${marker}"]');
+          if (el) {
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            return true;
+          }
+          return false;
+        })()
+      `);
+
+      // 清理 marker
+      await this.wc.executeJavaScript(`document.querySelector('[data-mx="${marker}"]')?.removeAttribute('data-mx')`).catch(() => {});
+
+      await this.wc.executeJavaScript(`window.dispatchEvent(new Event('focus')); delete document.hasFocus; 0`);
+      try { this.wc.focus(); } catch (_) {}
+    } catch (e) {
+      console.error('[clickedFileInject] CDP 注入失败:', e.message);
+      await this.wc.executeJavaScript(`document.querySelector('[data-mx="${marker}"]')?.removeAttribute('data-mx')`).catch(() => {});
+      await this.wc.executeJavaScript(`window.dispatchEvent(new Event('focus')); delete document.hasFocus; 0`).catch(() => {});
+      return false;
+    }
+
+    console.log('[clickedFileInject] ✅ 文件注入成功（零弹窗）');
+    return true;
   }
 
   // ---------- 页面导航 ----------
@@ -868,6 +1525,821 @@ export class NativeInteractions {
   async executeJavaScript(code) {
     this.#checkAlive();
     return this.wc.executeJavaScript(code);
+  }
+
+  // ==========================================
+  // 🆕 L2: CDP Accessibility Tree 语义锚点
+  // ==========================================
+
+  /**
+   * 归一化 CDP AXValue — 可能是 string 或 { value: string }，
+   * 取决于 Chrome 版本和页面结构。
+   */
+  #axString(val) {
+    if (typeof val === 'string') return val;
+    if (val && typeof val.value === 'string') return val.value;
+    return '';
+  }
+
+  /** 惰性启用 Accessibility 域 */
+  async #ensureAccessibility() {
+    if (this.#_axEnabled) return;
+    if (this.wc.debugger.isAttached()) {
+      try {
+        await this.wc.debugger.sendCommand('Accessibility.enable');
+        this.#_axEnabled = true;
+      } catch (e) {
+        console.warn('[AX] Accessibility.enable 失败:', e.message);
+      }
+    }
+  }
+
+  /** 获取完整 AX 树（自动归一化 name/description/value 为纯字符串） */
+  async getAXTree() {
+    this.#checkAlive();
+    await this.#ensureAccessibility();
+    try {
+      const result = await this.wc.debugger.sendCommand('Accessibility.getFullAXTree', { depth: -1 });
+      const nodes = result?.nodes || null;
+      if (nodes) {
+        // 归一化 AXValue → 纯字符串，避免 Chrome 版本差异导致 .toLowerCase() 报错
+        for (const node of nodes) {
+          node.name = this.#axString(node.name);
+          node.role = this.#axString(node.role);
+          if (node.description) node.description = this.#axString(node.description);
+          if (node.value) node.value = this.#axString(node.value);
+        }
+      }
+      return nodes;
+    } catch (e) {
+      console.warn('[AX] getFullAXTree 失败:', e.message);
+      return null;
+    }
+  }
+
+  /** 递归搜索 AX 节点 */
+  #searchAXNode(node, predicate) {
+    if (!node) return null;
+    if (predicate(node)) return node;
+    if (node.children) {
+      for (const child of node.children) {
+        const found = this.#searchAXNode(child, predicate);
+        if (found) return found;
+      }
+    }
+    if (node.childIds) {
+      // AX 树可能用 childIds 而非 children（取决于 CDP 返回格式）
+      // 这种情况下需要从 nodes 数组中查找；这里先处理 children 数组的情况
+    }
+    return null;
+  }
+
+  /** 按 placeholder 文本查找输入框 AX 节点 */
+  async findAXNodeByPlaceholder(text) {
+    const nodes = await this.getAXTree();
+    if (!nodes || !nodes.length) return null;
+    return this.#searchAXNode(nodes[0], node => {
+      if (node.role !== 'textField' && node.role !== 'textbox' && node.role !== 'searchBox') return false;
+      const name = (node.name || '').toLowerCase();
+      const desc = ((node.description || node.valueDescription) || '').toLowerCase();
+      const val = ((node.value && typeof node.value === 'string') ? node.value : '').toLowerCase();
+      const q = text.toLowerCase();
+      return name.includes(q) || desc.includes(q) || val.includes(q);
+    });
+  }
+
+  /** 按可见文本查找 AX 节点 */
+  async findAXNodeByText(text) {
+    const nodes = await this.getAXTree();
+    if (!nodes || !nodes.length) return null;
+    const q = text.toLowerCase();
+    return this.#searchAXNode(nodes[0], node => {
+      if (node.hidden) return false;
+      const name = (node.name || '').toLowerCase().trim();
+      return name === q || name.includes(q);
+    });
+  }
+
+  /** 按 role 查找 AX 节点 */
+  async findAXNodeByRole(role) {
+    const nodes = await this.getAXTree();
+    if (!nodes || !nodes.length) return null;
+    return this.#searchAXNode(nodes[0], node => node.role === role && !node.hidden);
+  }
+
+  /** 批量获取所有匹配 role 的 AX 节点 */
+  async findAXNodesByRole(role) {
+    const nodes = await this.getAXTree();
+    if (!nodes || !nodes.length) return [];
+    const results = [];
+    const walk = (node) => {
+      if (!node) return;
+      if (node.role === role && !node.hidden) results.push(node);
+      if (node.children) node.children.forEach(walk);
+    };
+    walk(nodes[0]);
+    return results;
+  }
+
+  // ---------- AX → 坐标 ----------
+
+  /** backendNodeId → boxModel 坐标 */
+  async backendNodeIdToBoxModel(backendNodeId) {
+    try {
+      const { object } = await this.wc.debugger.sendCommand('DOM.resolveNode', { backendNodeId });
+      if (!object?.objectId) return null;
+      const { nodeId } = await this.wc.debugger.sendCommand('DOM.requestNode', { objectId: object.objectId });
+      if (!nodeId) return null;
+      const { model } = await this.wc.debugger.sendCommand('DOM.getBoxModel', { nodeId });
+      if (!model?.content || model.content.length < 8) return null;
+      const [x1, y1, x2, y2, x3, y3, x4, y4] = model.content;
+      const x = Math.min(x1, x2, x3, x4);
+      const y = Math.min(y1, y2, y3, y4);
+      const width = Math.max(x1, x2, x3, x4) - x;
+      const height = Math.max(y1, y2, y3, y4) - y;
+      return { x, y, width, height };
+    } catch (e) {
+      console.warn('[AX] backendNodeIdToBoxModel 失败:', e.message);
+      return null;
+    }
+  }
+
+  /** 查找自定义元素（Shadow DOM closed 穿透）— 返回 boxModel */
+  async findCustomElementBox(tagName) {
+    try {
+      const { root } = await this.wc.debugger.sendCommand('DOM.getDocument', { depth: -1 });
+      const tag = tagName.toUpperCase();
+      let targetNodeId = null;
+
+      const search = (node) => {
+        if (!node) return;
+        if (node.nodeName === tag) { targetNodeId = node.nodeId; return; }
+        if (node.children) node.children.forEach(search);
+      };
+      search(root);
+
+      if (!targetNodeId) return null;
+
+      const { model } = await this.wc.debugger.sendCommand('DOM.getBoxModel', { nodeId: targetNodeId });
+      if (!model?.content || model.content.length < 8) return null;
+      const [x1, y1, x2, y2, x3, y3, x4, y4] = model.content;
+      const x = Math.min(x1, x2, x3, x4);
+      const y = Math.min(y1, y2, y3, y4);
+      return {
+        x, y,
+        width: Math.max(x1, x2, x3, x4) - x,
+        height: Math.max(y1, y2, y3, y4) - y
+      };
+    } catch (e) {
+      console.warn('[ShadowDOM] findCustomElementBox 失败:', e.message);
+      return null;
+    }
+  }
+
+  // ==========================================
+  // 🆕 L2: 组合操作（AX 搜索 → 坐标 → 动作）
+  // ==========================================
+
+  /** 通过 AX CDP 注入文本（解决 ProseMirror/sendInputEvent char 不兼容） */
+  async insertTextViaCDP(text) {
+    this.#checkAlive();
+    if (!this.wc.debugger.isAttached()) {
+      this.wc.debugger.attach('1.3');
+    }
+    // 确保 Input 域已启用
+    try {
+      await this.wc.debugger.sendCommand('Input.enable');
+    } catch (_) {}
+    // 长文本分块，避免 ProseMirror 事务系统过载
+    const CHUNK = 2000;
+    for (let i = 0; i < text.length; i += CHUNK) {
+      const chunk = text.slice(i, i + CHUNK);
+      await this.wc.debugger.sendCommand('Input.insertText', { text: chunk });
+      if (text.length > CHUNK) await sleep(100);
+    }
+  }
+
+  /** JS 原生 setter 设值 — 绕过 React 受控组件对 CDP insertText 的无视 */
+  async setNativeInputValue(cssSelector, text) {
+    this.#checkAlive();
+    return this.wc.executeJavaScript(`(function() {
+      const el = document.querySelector(${JSON.stringify(cssSelector)});
+      if (!el) return false;
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        el.tagName === 'INPUT' || el.tagName === 'TEXTAREA'
+          ? HTMLInputElement.prototype : HTMLElement.prototype, 'value'
+      )?.set;
+      if (nativeSetter) nativeSetter.call(el, ${JSON.stringify(text)});
+      else if (el.isContentEditable) el.textContent = ${JSON.stringify(text)};
+      else el.value = ${JSON.stringify(text)};
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      if (el.isContentEditable) el.dispatchEvent(new Event('blur', { bubbles: true }));
+      return true;
+    })()`);
+  }
+
+  /** JS 原生 setter 设值到 document.activeElement — 绕过 Shadow DOM + React 受控组件 */
+  async setActiveElementValue(text) {
+    this.#checkAlive();
+    return this.wc.executeJavaScript(`(function() {
+      const el = document.activeElement;
+      if (!el) return false;
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        el.tagName === 'INPUT' || el.tagName === 'TEXTAREA'
+          ? HTMLInputElement.prototype : HTMLElement.prototype, 'value'
+      )?.set;
+      if (nativeSetter) nativeSetter.call(el, ${JSON.stringify(text)});
+      else if (el.isContentEditable) el.textContent = ${JSON.stringify(text)};
+      else el.value = ${JSON.stringify(text)};
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      if (el.isContentEditable) el.dispatchEvent(new Event('blur', { bubbles: true }));
+      return true;
+    })()`);
+  }
+
+  /** CDP DOM.focus — 强制聚焦 backend node，让 activeElement 正确更新 */
+  async focusBackendNode(backendNodeId) {
+    this.#checkAlive();
+    try {
+      const { object } = await this.wc.debugger.sendCommand('DOM.resolveNode', { backendNodeId });
+      if (!object?.objectId) return false;
+      const { nodeId } = await this.wc.debugger.sendCommand('DOM.requestNode', { objectId: object.objectId });
+      if (!nodeId) return false;
+      await this.wc.debugger.sendCommand('DOM.focus', { nodeId });
+      return true;
+    } catch (e) {
+      console.warn('[NativeInteractions] focusBackendNode failed:', e.message);
+      return false;
+    }
+  }
+
+  /** 按可见文案点击（AX 优先，回退 DOM） */
+  async humanClickByText(text) {
+    // 先尝试 AX 树
+    const axNode = await this.findAXNodeByText(text);
+    if (axNode && axNode.backendDOMNodeId) {
+      const box = await this.backendNodeIdToBoxModel(axNode.backendDOMNodeId);
+      if (box && box.width > 0 && box.height > 0) {
+        await this.humanClickAtCoordinates(
+          box.x + box.width * 0.5,
+          box.y + box.height * 0.5
+        );
+        return true;
+      }
+    }
+    // 回退: 旧 DOM 文本扫描
+    return this.flexibleClick([text]);
+  }
+
+  /** 通过 AX 定位输入框并 CDP 插入文本 */
+  async humanTypeByAX(predicate, text) {
+    if (!text) return;
+
+    // 查找目标节点
+    let axNode = null;
+    if (predicate.placeholder) {
+      axNode = await this.findAXNodeByPlaceholder(predicate.placeholder);
+    }
+    if (!axNode && predicate.role) {
+      const nodes = await this.findAXNodesByRole(predicate.role);
+      // 对 contenteditable 场景：取第一个非 hidden 且 editable 的节点
+      axNode = nodes.find(n => !n.hidden) || nodes[0] || null;
+    }
+    if (!axNode && predicate.role) {
+      axNode = await this.findAXNodeByRole(predicate.role);
+    }
+
+    // 获取坐标并点击聚焦
+    if (axNode?.backendDOMNodeId) {
+      const box = await this.backendNodeIdToBoxModel(axNode.backendDOMNodeId);
+      if (box && box.width > 0 && box.height > 0) {
+        await this.humanClickAtCoordinates(
+          box.x + box.width * 0.5,
+          box.y + box.height * 0.5
+        );
+        await sleep(predicate.role === 'textbox' ? 500 : 200); // ProseMirror 需要更长时间
+        await this.insertTextViaCDP(text);
+        return;
+      }
+    }
+
+    // 回退: 旧 CSS 选择器方式 — 点击聚焦后用 CDP insertText（避免 sendInputEvent char 在小红书等 SPA 上失效）
+    if (predicate.cssFallback) {
+      await this.humanMouseMove(predicate.cssFallback);
+      await this.clickElement(predicate.cssFallback);
+      await sleep(300);
+      await this.insertTextViaCDP(text);
+    }
+  }
+
+  // ==========================================
+  // 🆕 L3: 通用交互模式
+  // ==========================================
+
+  /** 开关切换 — AX 定位 label 附近的 switch */
+  async toggleSwitch(label) {
+    console.log(`[L3] toggleSwitch: "${label}"`);
+
+    // 策略1: AX 树找 label 附近的 switch 角色
+    const labelNode = await this.findAXNodeByText(label);
+    const switches = await this.findAXNodesByRole('switch');
+    if (switches.length > 0 && labelNode) {
+      // 找离 label 最近的 switch
+      let bestSwitch = null;
+      let bestDist = Infinity;
+      const lBox = labelNode.backendDOMNodeId
+        ? await this.backendNodeIdToBoxModel(labelNode.backendDOMNodeId) : null;
+      if (lBox) {
+        for (const sw of switches) {
+          if (!sw.backendDOMNodeId) continue;
+          const sBox = await this.backendNodeIdToBoxModel(sw.backendDOMNodeId);
+          if (!sBox) continue;
+          const dist = Math.abs(sBox.y - lBox.y) + Math.abs(sBox.x - lBox.x);
+          if (dist < bestDist) { bestDist = dist; bestSwitch = sw; }
+        }
+      }
+      // 如果没找到 label 附近匹配的，不盲目点击第一个 switch
+      if (bestSwitch && bestDist < 500) {
+        const box = await this.backendNodeIdToBoxModel(bestSwitch.backendDOMNodeId);
+        if (box && box.width > 0) {
+          await this.humanClickAtCoordinates(
+            box.x + box.width * 0.5,
+            box.y + box.height * 0.5
+          );
+          return true;
+        }
+      }
+    }
+
+    // 策略2: 回退 — 按文案点击（通常点击 label 文字即可切换）
+    const clicked = await this.flexibleClick([label]);
+    if (clicked) return true;
+
+    // 策略3: 找包含 label 的父级区域中的 toggle 元素
+    if (labelNode && labelNode.backendDOMNodeId) {
+      const box = await this.backendNodeIdToBoxModel(labelNode.backendDOMNodeId);
+      if (box) {
+        // 点击 label 右侧（toggle 通常紧挨 label）
+        await this.humanClickAtCoordinates(
+          box.x + box.width + 24,
+          box.y + box.height * 0.5
+        );
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /** 下拉选择 — 点击触发 → 等展开 → 点选项 */
+  async selectDropdown(label, optionText) {
+    console.log(`[L3] selectDropdown: "${label}" → "${optionText}"`);
+    const triggered = await this.humanClickByText(label);
+    if (!triggered) {
+      // 回退
+      await this.flexibleClick([label]);
+    }
+    await sleep(600);
+    const selected = await this.humanClickByText(optionText);
+    if (!selected) {
+      await this.flexibleClick([optionText]);
+    }
+    return true;
+  }
+
+  /**
+   * 通用弹窗流程
+   * @param {string} triggerText - 触发按钮文案
+   * @param {Array<{type: 'click'|'fileInput'|'wait', text?: string|string[], path?: string, ms?: number}>} steps
+   */
+  async dialogFlow(triggerText, steps) {
+    console.log(`[L3] dialogFlow: "${triggerText}" (${steps.length} steps)`);
+
+    // 打开弹窗
+    const triggered = await this.humanClickByText(triggerText);
+    if (!triggered) {
+      await this.flexibleClick([triggerText]);
+    }
+    await sleep(800);
+
+    // 执行步骤
+    for (const step of steps) {
+      switch (step.type) {
+        case 'click': {
+          const texts = Array.isArray(step.text) ? step.text : [step.text];
+          let clicked = false;
+          for (const t of texts) {
+            clicked = await this.humanClickByText(t);
+            if (clicked) break;
+          }
+          if (!clicked) {
+            await this.flexibleClick(texts);
+          }
+          break;
+        }
+        case 'fileInput': {
+          const locators = Array.isArray(step.text) ? step.text : [step.text || '上传'];
+          await this.safeUpload(step.path, locators);
+          break;
+        }
+        case 'wait': {
+          await sleep(step.ms || 1000);
+          break;
+        }
+      }
+      await sleep(300);
+    }
+
+    return true;
+  }
+
+  // ==========================================
+  // 🛡️ 防检测加固层 (Anti-Detection Hardening)
+  // ==========================================
+
+  /**
+   * 人类打字模拟 — 逐字输入 + 随机节奏 + 偶尔停顿。
+   * 比 insertTextViaCDP 的一次性灌入更像真人。
+   * @param {string} text
+   */
+  async humanTypeText(text) {
+    this.#checkAlive();
+    if (!this.wc.debugger.isAttached()) {
+      this.wc.debugger.attach('1.3');
+    }
+    try { await this.wc.debugger.sendCommand('Input.enable'); } catch (_) {}
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+
+      // 逐字符 insertText（比 dispatchKeyEvent 更兼容 ProseMirror 等编辑器）
+      await this.wc.debugger.sendCommand('Input.insertText', { text: char });
+
+      // 基础延迟：50-180ms 高斯分布（真人打字区间）
+      let delay = 50 + Math.random() * 130;
+
+      // 10% 概率出现"思考停顿" 400-1200ms
+      if (Math.random() < 0.10) delay += 400 + Math.random() * 800;
+
+      // 标点符号后稍微停顿
+      if ('.!?。！？，,;；'.includes(char)) delay += 100 + Math.random() * 200;
+
+      // 每 15-30 个字符出现一次较长停顿（像在看屏幕）
+      if (i > 0 && i % (15 + Math.floor(Math.random() * 16)) === 0) {
+        delay += 300 + Math.random() * 500;
+      }
+
+      await sleep(delay);
+    }
+  }
+
+  /**
+   * 人类鼠标移动 — 贝塞尔曲线路径 + 终点高斯偏移。
+   * 使用 nut.js 生成 OS 级真实鼠标事件，同时通过 CDP 同步浏览器状态。
+   * @param {number} toX - 目标 X
+   * @param {number} toY - 目标 Y
+   * @param {number} [steps] - 路径点数（默认 8-15）
+   */
+  async humanMouseMove(toX, toY, steps) {
+    this.#checkAlive();
+    try {
+      const { mouse, Point } = await import('@nut-tree-fork/nut-js');
+
+      // 终点加 ±3px 高斯偏移（真人不会精确到像素）
+      const jitterX = toX + (Math.random() - 0.5) * 6;
+      const jitterY = toY + (Math.random() - 0.5) * 6;
+
+      // 获取当前鼠标位置作为起点
+      const currentPos = await mouse.getPosition();
+      const startX = currentPos.x;
+      const startY = currentPos.y;
+
+      // 生成贝塞尔控制点（模拟手腕弧线）
+      const dx = jitterX - startX;
+      const dy = jitterY - startY;
+      const ctrlX = startX + dx * (0.3 + Math.random() * 0.4) + (Math.random() - 0.5) * 60;
+      const ctrlY = startY + dy * (0.3 + Math.random() * 0.4) + (Math.random() - 0.5) * 60;
+
+      const numSteps = steps || (8 + Math.floor(Math.random() * 8));
+      for (let i = 1; i <= numSteps; i++) {
+        const t = i / numSteps;
+        // 二次贝塞尔：P = (1-t)²·start + 2(1-t)t·ctrl + t²·end
+        const x = Math.round((1 - t) * (1 - t) * startX + 2 * (1 - t) * t * ctrlX + t * t * jitterX);
+        const y = Math.round((1 - t) * (1 - t) * startY + 2 * (1 - t) * t * ctrlY + t * t * jitterY);
+        await mouse.setPosition(new Point(x, y));
+        await sleep(8 + Math.random() * 12); // 每步 8-20ms
+      }
+
+      // 确保最终位置准确
+      await mouse.setPosition(new Point(Math.round(jitterX), Math.round(jitterY)));
+
+      // 同步 CDP 鼠标位置
+      if (!this.wc.debugger.isAttached()) {
+        this.wc.debugger.attach('1.3');
+      }
+      await this.wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x: Math.round(jitterX), y: Math.round(jitterY)
+      });
+
+    } catch (e) {
+      // nut.js 不可用时降级到 CDP
+      console.warn('[AntiDetect] nut.js mouseMove 失败，降级 CDP:', e.message);
+      if (!this.wc.debugger.isAttached()) {
+        this.wc.debugger.attach('1.3');
+      }
+      await this.wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x: Math.round(toX), y: Math.round(toY)
+      });
+    }
+  }
+
+  /**
+   * OS 级文件注入 — 打开原生文件对话框 + nut.js 键盘输入路径。
+   * 生成 isTrusted: true 的文件选择事件，平台无法区分与真人操作。
+   * @param {string} filePath - 绝对文件路径
+   * @returns {boolean} 是否成功
+   */
+  async injectFileViaNativeDialog(filePath) {
+    console.warn('⚠️ [安全警告] injectFileViaNativeDialog 使用 OS 级键盘输入 — 可能干扰用户鼠标/键盘！');
+    console.warn('⚠️ 优先使用 injectFileDirect（纯 CDP，零干扰）。');
+    this.#checkAlive();
+    try {
+      const { keyboard, Key } = await import('@nut-tree-fork/nut-js');
+      const path = await import('node:path');
+      const fs = await import('node:fs');
+
+      const cleanPath = path.resolve(String(filePath).trim());
+      if (!fs.existsSync(cleanPath)) {
+        console.error('[AntiDetect] 文件不存在:', cleanPath);
+        return false;
+      }
+
+      // 1. 临时解除防弹窗结界
+      await this.wc.executeJavaScript(`
+        (() => {
+          if (window.__dialog_sealed) {
+            window.__dialog_sealed = false;
+            // 恢复原型 click
+            if (HTMLInputElement.prototype.click.__orig) {
+              HTMLInputElement.prototype.click = HTMLInputElement.prototype.click.__orig;
+            }
+            // 暂时移除 pointer-events:none
+            var s = document.getElementById('mx-seal-style');
+            if (s) s.disabled = true;
+          }
+        })()
+      `).catch(() => {});
+
+      // 2. 找到 file input 并触发 click
+      const clicked = await this.wc.executeJavaScript(`
+        (function() {
+          var inputs = document.querySelectorAll('input[type="file"]');
+          if (inputs.length === 0) return false;
+          var target = inputs[inputs.length - 1];
+          target.scrollIntoView({ block: 'center', behavior: 'instant' });
+          target.click();
+          return true;
+        })()
+      `);
+
+      if (!clicked) {
+        console.error('[AntiDetect] 未找到 file input');
+        await this.#restoreFileDialogSeal();
+        return false;
+      }
+
+      // 3. 等待系统文件对话框打开
+      await sleep(1200);
+
+      // 4. 用 nut.js 键盘输入文件路径并确认
+      //    Windows 文件对话框：地址栏已有焦点，直接输入路径
+      await keyboard.type(cleanPath);
+      await sleep(300);
+      await keyboard.pressKey(Key.Enter);
+      await sleep(100);
+      await keyboard.releaseKey(Key.Enter);
+
+      // 5. 等待文件选择生效
+      await sleep(800);
+
+      // 6. 恢复防弹窗结界
+      await this.#restoreFileDialogSeal();
+
+      // 7. 验证文件已选择
+      const fileCount = await this.wc.executeJavaScript(`
+        (function() {
+          var inputs = document.querySelectorAll('input[type="file"]');
+          var total = 0;
+          for (var i = 0; i < inputs.length; i++) total += (inputs[i].files ? inputs[i].files.length : 0);
+          return total;
+        })()
+      `);
+
+      console.log('[AntiDetect] 文件注入结果:', fileCount > 0 ? '✅ 成功' : '❌ 失败');
+      return fileCount > 0;
+
+    } catch (e) {
+      console.error('[AntiDetect] OS级文件注入失败:', e.message);
+      await this.#restoreFileDialogSeal();
+      return false;
+    }
+  }
+
+  async #restoreFileDialogSeal() {
+    try {
+      await this.wc.executeJavaScript(`
+        (() => {
+          window.__dialog_sealed = true;
+          var s = document.getElementById('mx-seal-style');
+          if (s) s.disabled = false;
+        })()
+      `);
+    } catch (_) {}
+  }
+
+  /**
+   * 指纹伪装 — 在页面加载前注入覆盖脚本。
+   * 调用时机：BrowserWindow 创建后、导航前。
+   */
+
+  /**
+   * 在指定坐标执行原生鼠标点击（封装 mouseDown + mouseUp）。
+   * 抽象层方法，不暴露底层 webContents。
+   * @param {number} x
+   * @param {number} y
+   */
+  async nativeClickAt(x, y) {
+    console.warn('⚠️ [安全警告] nativeClickAt 使用 OS 级鼠标移动 — 真实光标会跳动！');
+    console.warn('⚠️ 优先使用 humanClickAtCoordinates（纯 sendInputEvent，零干扰）。');
+    this.#checkAlive();
+    await this.humanMouseMove(x, y);
+    await sleep(50 + Math.random() * 30);
+    if (!this.wc.debugger.isAttached()) {
+      this.wc.debugger.attach('1.3');
+    }
+    await this.wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: Math.round(x), y: Math.round(y), button: 'left', clickCount: 1
+    });
+    await sleep(60 + Math.random() * 40);
+    await this.wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: Math.round(x), y: Math.round(y), button: 'left', clickCount: 1
+    });
+  }
+
+  async applyFingerprintHardening() {
+    this.#checkAlive();
+
+    // 1. 在所有新页面加载前注入伪装脚本
+    await this.wc.executeJavaScript(`
+      (() => {
+        if (window.__fingerprint_hardened) return;
+        window.__fingerprint_hardened = true;
+
+        // ── navigator.webdriver = false ──
+        Object.defineProperty(navigator, 'webdriver', {
+          get: () => false, configurable: true
+        });
+
+        // ── 补全 window.chrome ──
+        if (!window.chrome) window.chrome = {};
+        if (!window.chrome.runtime) {
+          window.chrome.runtime = {
+            connect: function() { return { onMessage: { addListener: function(){}, removeListener: function(){} }, postMessage: function(){}, disconnect: function(){} }; },
+            sendMessage: function() {},
+            onMessage: { addListener: function(){}, removeListener: function(){} },
+            PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux', OPENBSD: 'openbsd' },
+            PlatformArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64' },
+            PlatformNaclArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64' },
+            RequestUpdateCheckStatus: { THROTTLED: 'throttled', NO_UPDATE: 'no_update', UPDATE_AVAILABLE: 'update_available' },
+            OnInstalledReason: { INSTALL: 'install', UPDATE: 'update', CHROME_UPDATE: 'chrome_update', SHARED_MODULE_UPDATE: 'shared_module_update' },
+            OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' }
+          };
+        }
+        if (!window.chrome.csi) {
+          window.chrome.csi = function() { return { onloadT: Date.now(), pageT: Date.now() - performance.timing.navigationStart, startE: performance.timing.navigationStart, tran: 15 }; };
+        }
+        if (!window.chrome.loadTimes) {
+          window.chrome.loadTimes = function() {
+            var pt = performance.timing;
+            return {
+              commitLoadTime: pt.responseStart / 1000,
+              connectionInfo: 'http/1.1',
+              finishDocumentLoadTime: pt.domContentLoadedEventEnd / 1000,
+              finishLoadTime: pt.loadEventEnd / 1000,
+              firstPaintAfterLoadTime: 0,
+              firstPaintTime: pt.domContentLoadedEventEnd / 1000,
+              navigationType: 'Other',
+              npnNegotiatedProtocol: 'unknown',
+              requestTime: pt.navigationStart / 1000,
+              startLoadTime: pt.navigationStart / 1000,
+              wasAlternateProtocolAvailable: false,
+              wasFetchedViaSpdy: false,
+              wasNpnNegotiated: false
+            };
+          };
+        }
+
+        // ── 伪造 plugins ──
+        var fakePlugins = [
+          { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 },
+          { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1 },
+          { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 2 }
+        ];
+        Object.defineProperty(navigator, 'plugins', {
+          get: function() {
+            var list = fakePlugins;
+            list.item = function(i) { return this[i] || null; };
+            list.namedItem = function(n) { for (var i = 0; i < this.length; i++) if (this[i].name === n) return this[i]; return null; };
+            list.refresh = function() {};
+            return list;
+          }, configurable: true
+        });
+
+        // ── 伪造 MimeType ──
+        Object.defineProperty(navigator, 'mimeTypes', {
+          get: function() {
+            var types = [
+              { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
+              { type: 'application/x-google-chrome-pdf', suffixes: 'pdf', description: 'Portable Document Format' }
+            ];
+            types.item = function(i) { return this[i] || null; };
+            types.namedItem = function(n) { for (var i = 0; i < this.length; i++) if (this[i].type === n) return this[i]; return null; };
+            return types;
+          }, configurable: true
+        });
+
+        // ── 伪造 permissions ──
+        if (navigator.permissions) {
+          var origQuery = navigator.permissions.query.bind(navigator.permissions);
+          navigator.permissions.query = function(desc) {
+            if (desc && desc.name === 'notifications') {
+              return Promise.resolve({ state: Notification.permission || 'default', onchange: null });
+            }
+            return origQuery(desc);
+          };
+        }
+
+        // ── 移除自动化痕迹 ──
+        delete navigator.__proto__.webdriver;
+
+        // ── 伪造 connection.rtt ──
+        if (navigator.connection) {
+          Object.defineProperty(navigator.connection, 'rtt', { get: () => 100, configurable: true });
+        }
+
+        // ── Canvas 指纹噪声 ──
+        var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+        HTMLCanvasElement.prototype.toDataURL = function(type) {
+          if (type === 'image/png' && this.width > 16 && this.height > 16) {
+            var ctx = this.getContext('2d');
+            if (ctx) {
+              // 加极微小噪声（肉眼不可见，但改变指纹哈希）
+              var imgData = ctx.getImageData(0, 0, Math.min(this.width, 4), Math.min(this.height, 4));
+              for (var i = 0; i < imgData.data.length; i += 4) {
+                imgData.data[i] = imgData.data[i] ^ (Math.random() > 0.5 ? 1 : 0);
+              }
+              ctx.putImageData(imgData, 0, 0);
+            }
+          }
+          return origToDataURL.apply(this, arguments);
+        };
+
+        // ── AudioContext 指纹噪声 ──
+        if (window.AudioContext || window.webkitAudioContext) {
+          var OrigAC = window.AudioContext || window.webkitAudioContext;
+          var WrappedAC = function() {
+            var ac = new OrigAC();
+            var origCreateOsc = ac.createOscillator.bind(ac);
+            ac.createOscillator = function() {
+              var osc = origCreateOsc();
+              var origStart = osc.start.bind(osc);
+              osc.start = function(when) {
+                // 添加微小频率偏移
+                osc.frequency.value += Math.random() * 0.0001;
+                return origStart(when);
+              };
+              return osc;
+            };
+            return ac;
+          };
+          WrappedAC.prototype = OrigAC.prototype;
+          if (window.AudioContext) window.AudioContext = WrappedAC;
+          else window.webkitAudioContext = WrappedAC;
+        }
+
+        // ── 防止 toString 检测 ──
+        var nativeToString = Function.prototype.toString;
+        Function.prototype.toString = function() {
+          if (this === navigator.permissions.query) return 'function query() { [native code] }';
+          if (this === HTMLCanvasElement.prototype.toDataURL) return 'function toDataURL() { [native code] }';
+          return nativeToString.call(this);
+        };
+      })();
+    `);
+
+    console.log('[AntiDetect] ✅ 指纹伪装已注入');
   }
 }
 

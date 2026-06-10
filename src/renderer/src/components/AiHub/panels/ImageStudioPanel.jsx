@@ -5,6 +5,7 @@ import {
   Rocket, PenTool, Layout, Users, Wand2, ImagePlus, Layers,
 } from 'lucide-react';
 import { useAiTasks } from '../AiTaskContext';
+import usePersistentState from '../../../hooks/usePersistentState';
 
 // ──────────────────────────────────────────────
 // 工具元数据配置表
@@ -224,14 +225,6 @@ const ACCENT_MAP = {
   cyan: { border: 'border-cyan-400', bg: 'bg-cyan-50', text: 'text-cyan-700', bar: 'from-cyan-500 to-teal-500' },
 };
 
-function usePersistentState(key, defaultValue) {
-  const [value, setValue] = useState(() => {
-    try { return window.localStorage.getItem(key) !== null ? JSON.parse(window.localStorage.getItem(key)) : defaultValue; }
-    catch (e) { return defaultValue; }
-  });
-  useEffect(() => { window.localStorage.setItem(key, JSON.stringify(value)); }, [key, value]);
-  return [value, setValue];
-}
 
 export default function ImageStudioPanel({ activeWorkspace, workspaceMeta }) {
   const { guardDispatch } = useAiTasks();

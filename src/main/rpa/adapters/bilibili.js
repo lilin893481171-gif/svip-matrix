@@ -60,8 +60,6 @@ export class BilibiliAdapter {
       } catch (e) {}
     }
 
-    if (this.task.dryRun) { this.broadcast('🛑 预览模式完成'); return; }
-
     await this.i.clickElement('button:has-text("立即投稿"), button:has-text("发布")');
     await sleep(8000);
   }

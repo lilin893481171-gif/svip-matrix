@@ -79,7 +79,16 @@ export default function AIFillPanel({ workbenchVideos, setWorkbenchVideos, onMap
     const platformRules = platforms.map(p => {
       const cfg = PLATFORM_COPY_PROMPTS[p];
       if (!cfg) return '';
-      return `【${p}】\n- 调性：${cfg.tone}\n- 标题限制：≤${cfg.titleMax}字\n- 描述风格：${cfg.descTone}\n- 标签规范：${cfg.tagStyle}\n- 规则：${cfg.rules}`;
+      const lines = [`【${p}】`, `- 调性：${cfg.tone}`];
+      if (cfg.titleMax > 0) {
+        lines.push(`- 标题限制：≤${cfg.titleMax}字`);
+      } else {
+        lines.push(`- 标题：该平台无独立标题字段，title 必须为空字符串 ""，标题内容通过【标题】格式放在 desc 开头`);
+      }
+      lines.push(`- 描述风格：${cfg.descTone}`);
+      lines.push(`- 标签限制：≤${cfg.tagMax}个，${cfg.tagStyle}`);
+      lines.push(`- 规则：${cfg.rules}`);
+      return lines.join('\n');
     }).filter(Boolean).join('\n\n');
 
     return `你是顶级的多平台视频文案策划专家。用户会描述视频内容，你需要为以下平台生成专属文案。
@@ -92,9 +101,10 @@ ${platformRules}
 
 ⚠️ 重要：
 - 标签输出为空格分隔的纯净词汇，不要带#号或逗号
-- 标题字数必须严格控制在平台限制内
-- 百家号没有独立标题字段，title 必须为空字符串 ""
-- 每个平台的标签数量不超过 5 个（百家号不超过 2 个）
+- 标题字数必须严格控制在各平台限制内
+- 标签数量必须严格控制在各平台限制内
+- 每个平台生成不同风格的文案，对号入座
+- 🚫 绝对禁止在描述中编造时间戳（如 "00:00 -" "01:30 -" 等格式），你根本不知道视频的实际时长
 
 📦 必须返回合法 JSON（不要 markdown 代码块标记）：
 {
@@ -169,36 +179,26 @@ ${platformRules}
   const applyToForms = (payload) => {
     if (!payload?.platforms) return;
 
-    const LIMITS = {
-      '小红书': { title: 20 }, '百家号': { title: 0, desc: 25 },
-      '抖音': { title: 30 }, '快手': { title: 30 },
-      '微信视频号': { title: 16, desc: 150 }, 'B站': { title: 80 },
-    };
-
     const processedPayload = { platforms: {} };
     for (const [plat, fields] of Object.entries(payload.platforms)) {
       const processed = { ...fields };
-      const limits = LIMITS[plat] || {};
+      const cfg = PLATFORM_COPY_PROMPTS[plat];
 
-      if (limits.title !== undefined && processed.title) {
-        if (limits.title === 0) {
+      // 标题截断（按平台配置，与 UI maxLength 一致）
+      if (cfg && processed.title) {
+        if (cfg.titleMax === 0) {
           processed.title = '';
         } else {
           const chars = Array.from(String(processed.title));
-          if (chars.length > limits.title) processed.title = chars.slice(0, limits.title).join('');
+          if (chars.length > cfg.titleMax) processed.title = chars.slice(0, cfg.titleMax).join('');
         }
       }
 
-      if (limits.desc !== undefined && processed.desc) {
-        const chars = Array.from(String(processed.desc));
-        if (chars.length > limits.desc) processed.desc = chars.slice(0, limits.desc).join('');
-      }
-
-      if (processed.tags) {
+      // 标签清洗 + 数量限制（按平台配置）
+      if (processed.tags && cfg) {
         let tagStr = String(processed.tags).replace(/[#＃,，、]/g, ' ').replace(/\s+/g, ' ').trim();
         const tagWords = tagStr.split(' ').filter(Boolean);
-        const maxTags = plat === '百家号' ? 2 : 5;
-        processed.tags = tagWords.slice(0, maxTags).join(' ');
+        processed.tags = tagWords.slice(0, cfg.tagMax).join(' ');
       }
 
       processedPayload.platforms[plat] = processed;
@@ -407,6 +407,7 @@ ${platformRules}
                         <div className="text-[10px] font-black text-zinc-400 uppercase tracking-wider border-b border-zinc-100 pb-1.5 mb-1">
                           生成预览
                         </div>
+                        <div className="max-h-[340px] overflow-y-auto space-y-2 pr-1">
                         {Object.entries(msg.payload.platforms).map(([plat, data]) => (
                           <div key={plat} className="bg-zinc-50 rounded-lg p-2.5 border border-zinc-100">
                             <div className="flex items-center gap-1.5 mb-1.5">
@@ -427,7 +428,7 @@ ${platformRules}
                             {data.desc && (
                               <div className="mb-1">
                                 <span className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider">描述</span>
-                                <p className="text-[10px] text-zinc-500 leading-relaxed line-clamp-3">{data.desc}</p>
+                                <p className="text-[11px] text-zinc-600 leading-relaxed whitespace-pre-wrap">{data.desc}</p>
                               </div>
                             )}
                             {data.tags && (
@@ -438,6 +439,7 @@ ${platformRules}
                             )}
                           </div>
                         ))}
+                        </div>
 
                         {/* Action buttons */}
                         <div className="flex gap-2 pt-1">

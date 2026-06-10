@@ -738,3 +738,8 @@ process.on('uncaughtException', async (error) => {
     await saveAllStates();
     process.exit(1);
 });
+
+process.on('unhandledRejection', async (reason) => {
+    console.error(`\n\n❌ 未处理的 Promise 拒绝:`, reason);
+    // 不退出进程，仅记录 — unhandledRejection 通常是 recoverable 的
+});

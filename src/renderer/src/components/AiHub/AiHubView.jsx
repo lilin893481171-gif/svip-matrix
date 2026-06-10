@@ -5,6 +5,7 @@ import IntentHeroInput from './IntentHeroInput';
 import { parseUserIntent } from '../../services/llmRouteService';
 import { AI_TOOLS_REGISTRY } from '../../config/aiMatrixData';
 import { cfApiUrl, authHeaders } from '../../config/matrixConfig';
+import usePersistentState from '../../hooks/usePersistentState';
 
 
 // 🌟 引入刚刚抽离出来的车间
@@ -17,15 +18,6 @@ import VideoGenPanel from './panels/VideoGenPanel';
 import BatchFissionPanel from './panels/BatchFissionPanel';
 import EngineCockpitPanel from './panels/EngineCockpitPanel';
 import EcommerceCorePanel from './panels/EcommerceCorePanel';
-
-function usePersistentState(key, defaultValue) {
-  const [value, setValue] = useState(() => {
-    try { return window.localStorage.getItem(key) !== null ? JSON.parse(window.localStorage.getItem(key)) : defaultValue; } 
-    catch (e) { return defaultValue; }
-  });
-  useEffect(() => { window.localStorage.setItem(key, JSON.stringify(value)); }, [key, value]);
-  return [value, setValue];
-}
 
 export default function AiHubView({ isPhoneBound, onRequestBind }) {
   const [cloudConfig, setCloudConfig] = useState(null);

@@ -57,8 +57,6 @@ export class WechatChannelsAdapter {
 
     if (this.task.isOriginal) await this.i.flexibleClick(['声明原创']);
 
-    if (this.task.dryRun) { this.broadcast('🛑 【预览模式】任务圆满结束'); return; }
-
     await this.i.clickElement('button:has-text("发表"), button:has-text("发布")');
 
     await Promise.race([

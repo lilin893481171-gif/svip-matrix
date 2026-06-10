@@ -14,6 +14,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useAiTasks } from '../AiTaskContext';
+import usePersistentState from '../../../hooks/usePersistentState';
 
 const SCENE_STYLES = [
   { value: 'nordic', label: '极简北欧' },
@@ -38,14 +39,6 @@ const RENDER_STAGES = [
   '4K 超分辨率增强中...',
 ];
 
-function usePersistentState(key, defaultValue) {
-  const [value, setValue] = useState(() => {
-    try { return window.localStorage.getItem(key) !== null ? JSON.parse(window.localStorage.getItem(key)) : defaultValue; }
-    catch (e) { return defaultValue; }
-  });
-  useEffect(() => { window.localStorage.setItem(key, JSON.stringify(value)); }, [key, value]);
-  return [value, setValue];
-}
 
 export default function EcommerceCorePanel({ workspaceMeta }) {
   const { guardDispatch } = useAiTasks();

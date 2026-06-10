@@ -21,3 +21,11 @@ account_states/
 
 # Repomix pack output
 repomix-output.xml
+
+# Debug artifacts
+debug-screenshot*.jpg
+debug-screenshot*.png
+
+# Compiled binaries
+src/main/tls-proxy/tls-proxy.exe
+src/main/tls-proxy/*.exe

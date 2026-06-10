@@ -7,6 +7,7 @@ import {
   TrendingUp, User,
 } from 'lucide-react';
 import { useAiTasks } from '../AiTaskContext';
+import usePersistentState from '../../../hooks/usePersistentState';
 
 // ──────────────────────────────────────────────
 // 引擎驾驶舱元数据配置表
@@ -175,14 +176,6 @@ const ACCENT_MAP = {
   cyan: { border: 'border-cyan-400', bg: 'bg-cyan-50', text: 'text-cyan-700', btn: 'bg-cyan-500', glow: 'shadow-[0_0_6px_rgba(6,182,212,0.6)]', bar: 'from-cyan-500 to-teal-500', lightBg: 'bg-cyan-500/10', lightBorder: 'border-cyan-500/30' },
 };
 
-function usePersistentState(key, defaultValue) {
-  const [value, setValue] = useState(() => {
-    try { return window.localStorage.getItem(key) !== null ? JSON.parse(window.localStorage.getItem(key)) : defaultValue; }
-    catch (e) { return defaultValue; }
-  });
-  useEffect(() => { window.localStorage.setItem(key, JSON.stringify(value)); }, [key, value]);
-  return [value, setValue];
-}
 
 // ──────────────────────────────────────────────
 // 组件本体

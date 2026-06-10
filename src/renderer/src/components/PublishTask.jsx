@@ -3,7 +3,7 @@ import {
   Plus, Video, Trash2, Edit, Globe, Scissors, Wand2, Hash, AtSign, MapPin,
   ShoppingBag, Eye, Settings, ToggleRight, Bot, Shield, Rss, Smile, Link as LinkIcon,
   FolderOpen, Activity, Loader2, Radio, MessageCircle, CheckCircle2,
-  ChevronRight, Sparkles, RefreshCw, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen,
+  ChevronRight, Sparkles, RefreshCw, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, AlertTriangle,
 } from 'lucide-react';
 import MediaLibraryPanel from './MediaLibraryPanel';
 import AIFillPanel from './AIFillPanel';
@@ -13,45 +13,14 @@ import BilibiliPanel from './BilibiliPanel';
 import CommonConfigPanel from './CommonConfigPanel';
 import WechatChannelsPanel from './WechatChannelsPanel';
 import BaijiahaoPanel from './BaijiahaoPanel';
+import DouyinPanel from './DouyinPanel';
 import { SYSTEM_MEDIA_FOLDER } from '../config/matrixConfig';
 import { useToast } from './ToastContext';
-
-const getElectron = () => {
-  if (typeof window !== 'undefined' && window.electron) return window.electron;
-  return {
-    ipcRenderer: {
-      invoke: async () => ({ success: false, message: '非原生环境' }),
-      on: () => {}, 
-      send: () => {}, 
-      removeAllListeners: () => {}
-    }
-  };
-};
-
-const PLATFORM_COLORS = {
-  '抖音': { text: 'text-[#fe2c55]', bg: 'bg-[#fe2c55]', border: 'border-[#fe2c55]', ring: 'focus:border-[#fe2c55]', tabBg: 'bg-[#161823]', tabText: 'text-white' },
-  '小红书': { text: 'text-[#ff2442]', bg: 'bg-[#ff2442]', border: 'border-[#ff2442]', ring: 'focus:border-[#ff2442]', tabBg: 'bg-[#ff2442]', tabText: 'text-white' },
-  'B站': { text: 'text-[#fb7299]', bg: 'bg-[#fb7299]', border: 'border-[#fb7299]', ring: 'focus:border-[#fb7299]', tabBg: 'bg-[#fb7299]', tabText: 'text-white' },
-  '微信视频号': { text: 'text-[#07C160]', bg: 'bg-[#07C160]', border: 'border-[#07C160]', ring: 'focus:border-[#07C160]', tabBg: 'bg-[#07C160]', tabText: 'text-white' },
-  '快手': { text: 'text-[#FF7700]', bg: 'bg-[#FF7700]', border: 'border-[#FF7700]', ring: 'focus:border-[#FF7700]', tabBg: 'bg-[#FF7700]', tabText: 'text-white' },
-  '知乎': { text: 'text-[#0066ff]', bg: 'bg-[#0066ff]', border: 'border-[#0066ff]', ring: 'focus:border-[#0066ff]', tabBg: 'bg-[#0066ff]', tabText: 'text-white' },
-  '微博': { text: 'text-[#ff8200]', bg: 'bg-[#ff8200]', border: 'border-[#ff8200]', ring: 'focus:border-[#ff8200]', tabBg: 'bg-[#ff8200]', tabText: 'text-white' },
-  '百家号': { text: 'text-[#2b88ff]', bg: 'bg-[#2b88ff]', border: 'border-[#2b88ff]', ring: 'focus:border-[#2b88ff]', tabBg: 'bg-[#2b88ff]', tabText: 'text-white' },
-  '企鹅号(腾讯)': { text: 'text-[#00A4FF]', bg: 'bg-[#00A4FF]', border: 'border-[#00A4FF]', ring: 'focus:border-[#00A4FF]', tabBg: 'bg-[#00A4FF]', tabText: 'text-white' },
-  '腾讯视频': { text: 'text-[#00A4FF]', bg: 'bg-[#00A4FF]', border: 'border-[#00A4FF]', ring: 'focus:border-[#00A4FF]', tabBg: 'bg-[#00A4FF]', tabText: 'text-white' },
-  '大鱼号(优酷)': { text: 'text-[#FF6600]', bg: 'bg-[#FF6600]', border: 'border-[#FF6600]', ring: 'focus:border-[#FF6600]', tabBg: 'bg-[#FF6600]', tabText: 'text-white' },
-  '爱奇艺号': { text: 'text-emerald-600', bg: 'bg-emerald-600', border: 'border-emerald-600', ring: 'focus:border-emerald-600', tabBg: 'bg-emerald-600', tabText: 'text-white' }
-};
-
-const getBrand = (platform) => PLATFORM_COLORS[platform] || { text: 'text-slate-600', bg: 'bg-slate-600', border: 'border-slate-600', ring: 'focus:border-slate-600', tabBg: 'bg-slate-800', tabText: 'text-white' };
-
-const getSafeVideoSrc = (path) => {
-  if (!path) return '';
-  if (path.startsWith('http') || path.startsWith('file://') || path.startsWith('blob:') || path.startsWith('/@fs/')) return path;
-  const normalizedPath = path.replace(/\\/g, '/');
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return `/@fs/${normalizedPath}`;
-  return `file:///${encodeURI(normalizedPath)}`;
-};
+import getElectron from '../utils/electron';
+import { PLATFORM_COLORS, getBrand } from '../utils/platformHelpers';
+import { validatePlatform, getValidationErrorMessages } from '../utils/validation';
+import { TaskStatusMonitor } from './TaskStatusMonitor';
+import { toMatrixMediaUrl } from '../utils/safePath';
 
 const PlatformHeader = ({ platform }) => {
   const colors = {
@@ -79,13 +48,27 @@ const PlatformHeader = ({ platform }) => {
 };
 
 // 🚨 接收了 setActiveTab，方便发完视频瞬间跳转发布队列
-export default function PublishTask({ accounts, videoList, setVideoList, activeVideoId, setActiveVideoId, publishHistory, setPublishHistory, setActiveTab, publishStep, setPublishStep, publishEditorTab, setPublishEditorTab, publishWorkbenchVideos, setPublishWorkbenchVideos, publishIsDryRun, setPublishIsDryRun, isPublishFullscreen, setIsPublishFullscreen }) {
+export default function PublishTask({ accounts, videoList, setVideoList, activeVideoId, setActiveVideoId, publishHistory, setPublishHistory, setActiveTab, publishStep, setPublishStep, publishEditorTab, setPublishEditorTab, publishWorkbenchVideos, setPublishWorkbenchVideos, isPublishFullscreen, setIsPublishFullscreen }) {
   const electron = getElectron();
   const videoRef = useRef(null);
   const { addToast } = useToast();
 
   const activeVideo = videoList.find(v => v.id === activeVideoId);
-  const [syncTasks, setSyncTasks] = useState([]);
+  // 🆕 syncTasks 从 publishHistory 派生（单一数据源，App.jsx 负责监听 IPC）
+  const syncTasks = publishHistory
+    .filter(t => !['任务圆满成功', '任务成功', '任务失败', '已取消', '任务已取消', '用户终止', '已转手动接管', '手动发布已完成', '需要重新扫码登录'].includes(t.status))
+    .map(t => ({
+      historyId: t.historyId,
+      videoId: t.videoId,
+      videoName: t.videoName,
+      platform: t.platform,
+      accountAlias: t.accountAlias,
+      status: t.status,
+      time: t.time,
+      taskId: t.taskId || '',
+      error: t.errorMessage || t.message || ''
+    }));
+  const [publishingPlatform, setPublishingPlatform] = useState(null);
 
   // ─── 队列面板折叠 ───
   const [isQueueCollapsed, setIsQueueCollapsed] = useState(() => {
@@ -137,8 +120,6 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
   const setActiveEditorTab = setPublishEditorTab;
   const workbenchVideos = publishWorkbenchVideos;
   const setWorkbenchVideos = setPublishWorkbenchVideos;
-  const isDryRun = publishIsDryRun;
-  const setIsDryRun = setPublishIsDryRun;
   const [mediaFolders, setMediaFolders] = useState(() => {
     const saved = typeof window !== 'undefined' ? localStorage.getItem('publish_user_media_folder') : null;
     return { system: SYSTEM_MEDIA_FOLDER, user: saved || '' };
@@ -157,10 +138,32 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
     const newVideos = results.map((r, i) => {
       const id = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${i}`;
       const video = r.video;
+
+      // 从 AI 结果中取第一个平台的文案作为通用默认值
+      let defaultDesc = '';
+      let defaultTags = '';
+      const platforms = {};
+      if (r.aiResult?.platforms) {
+        const entries = Object.entries(r.aiResult.platforms);
+        if (entries.length > 0) {
+          const [, firstData] = entries[0];
+          defaultDesc = firstData.desc || '';
+          defaultTags = Array.isArray(firstData.tags) ? firstData.tags.join(',') : (firstData.tags || '');
+        }
+        for (const [pName, pData] of entries) {
+          platforms[pName] = {
+            title: pData.title || r.title,
+            desc: pData.desc || defaultDesc,
+            tags: Array.isArray(pData.tags) ? pData.tags.join(',') : (pData.tags || defaultTags),
+            category: '科技数码',
+          };
+        }
+      }
+
       const universal = {
         title: r.title,
-        desc: '',
-        tags: '',
+        desc: defaultDesc,
+        tags: defaultTags,
         category: '科技数码',
         coverUrl: '',
         coverPath: '',
@@ -168,21 +171,10 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
         original: true,
         aigc: false,
       };
-      const platforms = {};
-      if (r.aiResult?.platforms) {
-        for (const [pName, pData] of Object.entries(r.aiResult.platforms)) {
-          platforms[pName] = {
-            title: pData.title || r.title,
-            desc: pData.desc || '',
-            tags: Array.isArray(pData.tags) ? pData.tags.join(',') : (pData.tags || ''),
-            category: '科技数码',
-          };
-        }
-      }
       return {
         id,
         path: video.path,
-        url: getSafeVideoSrc(video.path),
+        url: toMatrixMediaUrl(video.path),
         name: video.name,
         status: '未配置',
         config: { universal, platforms, targetAccounts: [], coverStatus: 'none' },
@@ -204,7 +196,7 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       return {
         id,
         path: video.path,
-        url: getSafeVideoSrc(video.path),
+        url: toMatrixMediaUrl(video.path),
         name: video.name,
         status: '未配置',
         config: {
@@ -238,23 +230,34 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
 
     const targetAccounts = activeVideo.config.targetAccounts || [];
     const matchedAccountStr = targetAccounts.find(accStr => accStr.includes(`|${platformName}|`));
-    
+
     if (!matchedAccountStr) { addToast('error', '未分配账号', `请为【${platformName}】指定目标账号`); return; }
 
     const [currentAccountId, _, accountAlias] = matchedAccountStr.split('|');
     const uConfig = activeVideo.config?.universal || {};
     const pConfig = activeVideo.config?.platforms?.[platformName] || {};
 
+    // ─── 发布前校验 ───
+    const merged = { ...uConfig, ...pConfig };
+    const validation = validatePlatform(merged, platformName);
+    if (!validation.valid) {
+      const errors = getValidationErrorMessages(validation);
+      addToast('error', `${platformName}校验不通过`, errors.join('；'));
+      return;
+    }
+
+    setPublishingPlatform(platformName);
+
     const taskData = {
-      historyId: `hist_${Date.now()}`,         
-      videoId: activeVideo.id,                 
-      videoName: uConfig.title || 'UNKNOWN_PAYLOAD', 
-      videoPath: activeVideo.videoPath || activeVideo.path, 
-      coverPath: uConfig.coverPath || '', 
-      platform: platformName,                  
-      accountId: currentAccountId,             
-      accountAlias: accountAlias,              
-      title: pConfig.title ?? uConfig.title ?? '',
+      historyId: `hist_${Date.now()}`,
+      videoId: activeVideo.id,
+      videoName: activeVideo.name || '未知文件',
+      title: (pConfig.title ?? uConfig.title) || '',
+      videoPath: activeVideo.videoPath || activeVideo.path,
+      coverPath: uConfig.coverPath || '',
+      platform: platformName,
+      accountId: currentAccountId,
+      accountAlias: accountAlias,
       desc: pConfig.desc ?? uConfig.desc ?? '',
       tags: pConfig.tags ?? uConfig.tags ?? '',
       category: pConfig.category || '科技',
@@ -266,22 +269,23 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       poi: pConfig.poi ?? '',
       productLink: pConfig.productLink ?? '',
       visibility: pConfig.visibility || 'public',
-      dryRun: isDryRun 
     };
 
     // 乐观 UI 更新
-    setPublishHistory(prev => [{ ...taskData, status: '排队中', time: new Date().toLocaleTimeString() }, ...prev]);
+    setPublishHistory(prev => [{ ...taskData, status: '排队中', time: new Date().toLocaleTimeString(), startTime: Date.now() }, ...prev]);
 
     try {
       const res = await electron.ipcRenderer.invoke('execute-auto-publish', taskData);
       if (res.success) {
          // 🚀 核心优化：一开始，立刻带你去发布队列看板！
-         setActiveTab('history'); 
+         setActiveTab('history');
       } else {
          addToast('error', '注入失败', res.message);
       }
     } catch (error) {
       addToast('error', 'RPA 引擎失联', '请检查底层浏览器运行状态');
+    } finally {
+      setPublishingPlatform(null);
     }
   };
 
@@ -295,39 +299,18 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
     }
   }, [selectedPlatforms, activeEditorTab]);
 
+  // 🆕 Toast 通知（状态更新由 App.jsx 单一管理，这里只收成功/失败通知）
   useEffect(() => {
-    const handleUpdate = (event, payload) => {
-      const safeMsg = (typeof payload.error === 'object' && payload.error) 
-        ? String(payload.error.message || JSON.stringify(payload.error)) 
-        : String(payload.error || payload.status || '未知状态');
-
-      setSyncTasks(prev => {
-        const exists = prev.find(item => item.historyId === payload.historyId);
-        if (exists) {
-          return prev.map(item => item.historyId === payload.historyId 
-            ? { ...item, status: payload.status, error: safeMsg, platform: payload.platform || item.platform, accountAlias: payload.accountAlias || item.accountAlias } 
-            : item
-          );
-        }
-        if (['排队中', '开始执行'].includes(payload.status) || payload.status.includes('中')) {
-          return [{ 
-            historyId: payload.historyId, videoId: payload.videoId, videoName: payload.title || '未知视频', 
-            platform: payload.platform, accountAlias: payload.accountAlias, status: payload.status, 
-            time: payload.timestamp ? new Date(payload.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString(), 
-            taskId: payload.taskId, error: safeMsg 
-          }, ...prev];
-        }
-        return prev;
-      });
-
-      if (payload.status === '任务成功') {
+    const handleUpdate = (payload) => {
+      if (payload.status === '任务圆满成功' || payload.status === '任务成功') {
         addToast('success', '发布成功', payload.title || '未知视频');
       } else if (payload.status === '任务失败') {
-        addToast('error', '发布失败', safeMsg);
+        const msg = payload.error || payload.message || '未知错误';
+        addToast('error', '发布失败', msg);
       }
     };
-    if (electron.ipcRenderer.on) electron.ipcRenderer.on('task-progress-update', handleUpdate);
-    return () => { if (electron.ipcRenderer.removeAllListeners) electron.ipcRenderer.removeAllListeners('task-progress-update'); };
+    const unsub = electron.ipcRenderer.on('task-progress-update', handleUpdate);
+    return () => { if (unsub) unsub(); };
   }, []);
 
   const handleRemoveVideo = (e, videoId, videoName) => {
@@ -408,10 +391,8 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
     const readyQueue = videoList.filter(v => v.status === '已就绪');
     if (readyQueue.length === 0) { addToast('warning', '序列为空', '请先将视频存为 [已就绪] 状态'); return; }
     
-    const confirmMsg = isDryRun 
-      ? `🛡️ [SIMULATION_MODE]\n侦测到 ${readyQueue.length} 个待发载荷。\n引擎将仅执行渗透与填表，最后一步会被防火墙拦截。`
-      : `🚀 [LIVE_FIRE_MODE]\n侦测到 ${readyQueue.length} 个实弹载荷。\n即将唤醒底层节点，请确认是否点火？`;
-    
+    const confirmMsg = `🚀 [LIVE_FIRE_MODE]\n侦测到 ${readyQueue.length} 个实弹载荷。\n即将唤醒底层节点，请确认是否点火？`;
+
     if (!confirm(confirmMsg)) return;
 
     setVideoList(prev => prev.map(v => v.status === '已就绪' ? { ...v, status: '发布中' } : v));
@@ -424,8 +405,7 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
         const [accountId, platform, accountAlias] = accStr.split('|');
         const historyId = `hist_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
         
-        setPublishHistory(prev => [{ historyId, videoId: vid.id, videoName: vid.name, platform, accountAlias, status: '排队中', time: new Date().toLocaleTimeString() }, ...prev]);
-        setSyncTasks(prev => [{ historyId, videoId: vid.id, videoName: vid.name, platform, accountAlias, status: '排队中', time: new Date().toLocaleTimeString(), taskId: '' }, ...prev]);
+        setPublishHistory(prev => [{ historyId, videoId: vid.id, videoName: vid.name, title: pConfig.title ?? uConfig.title ?? '', coverPath: uConfig.coverPath || '', platform, accountAlias, status: '排队中', time: new Date().toLocaleTimeString(), startTime: Date.now(), taskId: '', _videoSnapshot: { id: vid.id, path: vid.path, name: vid.name, config: vid.config } }, ...prev]);
 
         const pConfig = vid.config.platforms[platform] || {};
         const uConfig = vid.config.universal;
@@ -444,13 +424,12 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
           scheduled: pConfig.scheduled ?? false,
           scheduleTime: pConfig.scheduleTime ?? '',
           syncToutiao: pConfig.syncToutiao ?? true,
-          videoPath: vid.path, 
-          coverPath: uConfig.coverPath || '',
-          dryRun: isDryRun
+          videoPath: vid.path,
+          coverPath: uConfig.coverPath || ''
         });
 
         if (result.success) {
-          setSyncTasks(prev => prev.map(task => task.historyId === historyId ? { ...task, taskId: result.taskId } : task));
+          setPublishHistory(prev => prev.map(h => h.historyId === historyId ? { ...h, taskId: result.taskId } : h));
         }
       }
     }
@@ -499,131 +478,18 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       );
     }
 
-// ==================== 🔥 1. 抖音（已补齐「挂商品」功能） ====================
+// ==================== 🔥 1. 抖音（独立 DouyinPanel 组件） ====================
     if (activeEditorTab === '抖音') {
+      const dyConfig = { ...uConfig, ...pConfig };
       return (
-        <div className="bg-[#f6f6f6] min-h-full animate-in fade-in duration-300 py-6 pb-32 font-sans px-4 sm:px-8">
-          <div className="max-w-[840px] w-full mx-auto space-y-5">
-            <PlatformHeader platform={activeEditorTab} />
-            
-            {/* 卡片 1: 基础信息 */}
-            <div className="bg-white rounded-lg p-6 sm:p-8 shadow-sm">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-[16px] font-bold text-[#161823]">基础信息</h2>
-              </div>
-
-              <div className="space-y-6">
-                {/* 作品描述（不变） */}
-                <div className="flex flex-col sm:flex-row items-start">
-                  <div className="w-full sm:w-[100px] text-[14px] text-[#161823] mt-2 mb-2 sm:mb-0 flex items-center">
-                    作品描述 <span className="text-[#999] ml-1 border border-[#ccc] rounded-full w-[14px] h-[14px] flex items-center justify-center text-[10px] cursor-help">?</span>
-                  </div>
-                  <div className="flex-1 w-full">
-                    <div className="border border-[#e3e4e5] rounded-lg bg-[#fcfcfc] focus-within:border-[#fe2c55] focus-within:bg-white transition-all overflow-hidden">
-                      <div className="relative border-b border-[#f0f0f0]">
-                        <input 
-                          className="w-full bg-transparent p-3 text-[14px] text-[#161823] font-bold outline-none placeholder-[#999] pr-12" 
-                          placeholder="填写作品标题，为作品获得更多流量" 
-                          value={pConfig.title ?? uConfig.title} 
-                          onChange={e => updateConfig('抖音', 'title', e.target.value)} 
-                        />
-                        <span className="absolute right-3 top-3 text-[12px] text-[#999]">{(pConfig.title ?? uConfig.title)?.length || 0}/30</span>
-                      </div>
-                      <textarea 
-                        className="w-full bg-transparent p-3 h-24 text-[14px] text-[#161823] outline-none resize-none placeholder-[#999]" 
-                        placeholder="添加作品简介" 
-                        value={pConfig.desc ?? uConfig.desc} 
-                        onChange={e => updateConfig('抖音', 'desc', e.target.value)} 
-                      />
-                      <div className="px-3 pb-3 flex items-center justify-between">
-                        <div className="text-[#161823] font-bold text-[14px] flex gap-4">
-                          <span className="cursor-pointer hover:text-[#fe2c55]">#添加话题</span>
-                          <span className="cursor-pointer hover:text-[#fe2c55]">@好友</span>
-                        </div>
-                        <span className="text-[12px] text-[#999]">0 / 1000</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 🔥 新增：关联商品（挂商品） */}
-                <div className="flex flex-col sm:flex-row items-start">
-                  <div className="w-full sm:w-[100px] text-[14px] text-[#161823] mt-2 mb-2 sm:mb-0 flex items-center">
-                    关联商品 <span className="text-[#999] ml-1 border border-[#ccc] rounded-full w-[14px] h-[14px] flex items-center justify-center text-[10px] cursor-help">?</span>
-                  </div>
-                  <div className="flex-1 w-full">
-                    <div className="border border-[#e3e4e5] rounded-lg bg-[#fcfcfc] focus-within:border-[#fe2c55] focus-within:bg-white transition-all p-4">
-                      <input 
-                        className="w-full bg-transparent outline-none text-[14px] text-[#161823] placeholder-[#999]" 
-                        placeholder="输入商品ID / 商品链接 / 商品名称（支持搜索）" 
-                        value={pConfig.productLink || ''} 
-                        onChange={e => updateConfig('抖音', 'productLink', e.target.value)} 
-                      />
-                      <div className="text-[12px] text-[#999] mt-2 flex items-center">
-                        <ShoppingBag size={14} className="mr-1"/> 
-                        挂载后用户可直接点击购买，提升带货转化
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 话题标签（保持柔性探雷） */}
-                <div className="flex items-start">
-                  <div className="w-full sm:w-[100px] text-[14px] text-[#161823] mt-2">话题标签</div>
-                  <div className="flex-1">
-                    <input 
-                      className="w-full border border-[#e3e4e5] rounded p-3 text-sm outline-none focus:border-[#fe2c55]" 
-                      placeholder="输入#话题后按空格生成胶囊" 
-                      value={pConfig.tags || ''} 
-                      onChange={e => updateConfig('抖音', 'tags', e.target.value)} 
-                    />
-                  </div>
-                </div>
-
-                {/* 添加地点 */}
-                <div className="flex items-start">
-                  <div className="w-full sm:w-[100px] text-[14px] text-[#161823] mt-2">添加地点</div>
-                  <input 
-                    className="flex-1 border border-[#e3e4e5] rounded p-3 text-sm outline-none focus:border-[#fe2c55]" 
-                    placeholder="搜索地点（POI）" 
-                    value={pConfig.poi || ''} 
-                    onChange={e => updateConfig('抖音', 'poi', e.target.value)} 
-                  />
-                </div>
-
-                {/* 定时发布 + 同步头条（不变） */}
-                <div className="flex items-center justify-between">
-                  <div className="text-[14px] text-[#161823]">定时发布</div>
-                  <div className="flex items-center gap-4">
-                    <label className="flex items-center cursor-pointer">
-                      <input type="radio" name="dy_time" checked={!pConfig.scheduled} onChange={()=>updateConfig('抖音', 'scheduled', false)} className="accent-[#fe2c55]" />
-                      <span className="ml-2 text-[14px]">立即发布</span>
-                    </label>
-                    <label className="flex items-center cursor-pointer">
-                      <input type="radio" name="dy_time" checked={pConfig.scheduled} onChange={()=>updateConfig('抖音', 'scheduled', true)} className="accent-[#fe2c55]" />
-                      <span className="ml-2 text-[14px]">定时发布</span>
-                    </label>
-                  </div>
-                </div>
-                {pConfig.scheduled && (
-                  <input type="datetime-local" className="w-full border border-[#e3e4e5] rounded p-3 text-sm" value={pConfig.scheduleTime || ''} onChange={e=>updateConfig('抖音', 'scheduleTime', e.target.value)} />
-                )}
-
-                <div className="flex items-center justify-between">
-                  <div className="text-[14px] text-[#161823]">同步至今日头条</div>
-                  <ToggleRight size={32} className={pConfig.syncToutiao ? "text-[#fe2c55]" : "text-[#e3e4e5]"} onClick={()=>updateConfig('抖音', 'syncToutiao', !pConfig.syncToutiao)} />
-                </div>
-              </div>
-            </div>
-
-            {/* 底部按钮 */}
-            <div className="pt-6 pb-8 flex justify-center gap-4 border-t border-[#e3e4e5] mt-6">
-              <button className="bg-white border border-[#e3e4e5] text-[#161823] px-10 py-2.5 rounded-xl text-[14px] font-bold hover:bg-[#f9f9f9] transition shadow-sm">暂存草稿</button>
-              <button onClick={() => handlePublish('抖音')} className="bg-[#fe2c55] text-white px-12 py-2.5 rounded-xl shadow-md text-[14px] font-bold hover:bg-[#e0264b] transition active:scale-95">
-                立即发布至抖音
-              </button>
-            </div>
-          </div>
+        <div className="bg-[#f6f6f6] min-h-full animate-in fade-in duration-300 py-6 pb-32 font-sans px-4 sm:px-8 flex justify-center">
+          <DouyinPanel
+            config={dyConfig}
+            onChange={(field, value) => updateConfig('抖音', field, value)}
+            onPublish={() => handlePublish('抖音')}
+            onSaveDraft={() => updateConfig('抖音', '_draftSaved', true)}
+            isPublishing={publishingPlatform === '抖音'}
+          />
         </div>
       );
     }
@@ -636,31 +502,36 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
           config={xhsConfig}
           onChange={(field, value) => updateConfig('小红书', field, value)}
           onPublish={() => handlePublish('小红书')}
-          onSaveDraft={() => console.log('[小红书] 暂存草稿', xhsConfig)}
+          onSaveDraft={() => updateConfig('小红书', '_draftSaved', true)}
+          isPublishing={publishingPlatform === '小红书'}
         />
       );
     }
 
 // ==================== 🔥 3. 快手 ====================
     if (activeEditorTab === '快手') {
+      const ksConfig = { ...uConfig, ...pConfig };
       return (
         <KuaishouPanel
-          config={pConfig}
+          config={ksConfig}
           onChange={(field, value) => updateConfig('快手', field, value)}
           onPublish={() => handlePublish('快手')}
-          onSaveDraft={() => console.log('[快手] 存草稿', pConfig)}
+          onSaveDraft={() => updateConfig('快手', '_draftSaved', true)}
+          isPublishing={publishingPlatform === '快手'}
         />
       );
     }
 
 // ==================== 🔥 4. B站 ====================
     if (activeEditorTab === 'B站') {
+      const biliConfig = { ...uConfig, ...pConfig };
       return (
         <BilibiliPanel
-          config={pConfig}
+          config={biliConfig}
           onChange={(field, value) => updateConfig('B站', field, value)}
           onPublish={() => handlePublish('B站')}
-          onSaveDraft={() => console.log('[B站] 存草稿', pConfig)}
+          onSaveDraft={() => updateConfig('B站', '_draftSaved', true)}
+          isPublishing={publishingPlatform === 'B站'}
         />
       );
     }
@@ -672,10 +543,11 @@ if (activeEditorTab === '微信视频号') {
     <div className="bg-[#f5f6f7] min-h-full animate-in fade-in duration-300 py-6 flex justify-center">
       <WechatChannelsPanel
         config={wxConfig}
-        onChange={(field, value) => updateConfig('微信视频号', field, value)}
+            onChange={(field, value) => { updateConfig('微信视频号', field, value); if (field === 'coverPath') { updateConfig('universal', 'coverUrl', value); updateConfig('universal', 'coverPath', value); } }}
         onPublish={() => handlePublish('微信视频号')}
-        onSaveDraft={() => console.log('[微信视频号] 存草稿', wxConfig)}
+        onSaveDraft={() => updateConfig('微信视频号', '_draftSaved', true)}
         activeVideo={activeVideo}
+        isPublishing={publishingPlatform === '微信视频号'}
       />
     </div>
   );
@@ -683,12 +555,14 @@ if (activeEditorTab === '微信视频号') {
 
     // ==================== 🔥 6. 百家号 ====================
     if (activeEditorTab === '百家号') {
+      const bjhConfig = { ...uConfig, ...pConfig };
       return (
         <BaijiahaoPanel
-          config={pConfig}
+          config={bjhConfig}
           onChange={(field, value) => updateConfig('百家号', field, value)}
           onPublish={() => handlePublish('百家号')}
           onSaveDraft={() => updateConfig('百家号', '_draftSaved', true)}
+          isPublishing={publishingPlatform === '百家号'}
         />
       );
     }
@@ -982,7 +856,11 @@ return (
                   <div className="flex justify-between items-end">
                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${statusColor}`}>{vid.status}</span>
                   </div>
-                  {vid.status !== '发布中' && (
+                  {vid.status === '发布中' ? (
+                    <button onClick={(e) => handleRemoveVideo(e, vid.id, vid.name)} className={`absolute top-2 right-2 p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-all ${isActive ? 'text-amber-400 hover:bg-slate-800' : 'text-amber-500 hover:text-red-500 hover:bg-slate-200'}`} title="正在发布中，强制移除将中断当前任务">
+                      <AlertTriangle size={14} />
+                    </button>
+                  ) : (
                     <button onClick={(e) => handleRemoveVideo(e, vid.id, vid.name)} className={`absolute top-2 right-2 p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-all ${isActive ? 'text-red-400 hover:bg-slate-800' : 'text-slate-400 hover:text-red-500 hover:bg-slate-200'}`}>
                       <Trash2 size={14} />
                     </button>
@@ -1017,7 +895,11 @@ return (
             <div className="p-3 border-b border-slate-100 bg-slate-50 flex justify-center items-center gap-6 shadow-inner relative overflow-hidden flex-shrink-0">
               <div className="flex flex-col items-center">
                 <div className="w-[140px] h-[240px] bg-black rounded-xl overflow-hidden border-[4px] border-slate-700 relative shadow-2xl">
-                  <video ref={videoRef} src={activeVideo.url} controls className="w-full h-full object-contain bg-black" />
+                  {activeVideo.url ? (
+                    <video ref={videoRef} src={activeVideo.url} controls className="w-full h-full object-contain bg-black" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-slate-500 text-[10px]">视频源不可用</div>
+                  )}
                 </div>
               </div>
               <div className="flex flex-col items-center justify-center h-[240px]">
@@ -1029,7 +911,7 @@ return (
               </div>
               <div className="flex flex-col items-center">
                 <div className="w-[140px] h-[240px] bg-slate-800 rounded-xl border border-slate-700 relative flex items-center justify-center shadow-lg overflow-hidden">
-                  {!activeVideo.config.universal.coverUrl ? <span className="text-[10px] text-slate-500 text-center px-4">物理封面占位图</span> : <img src={activeVideo.config.universal.coverUrl} className="w-full h-full object-cover" alt="封面" />}
+                  {activeVideo.config.universal.coverUrl ? <img src={toMatrixMediaUrl(activeVideo.config.universal.coverUrl)} className="w-full h-full object-cover" alt="封面" /> : <span className="text-[10px] text-slate-500 text-center px-4">物理封面占位图</span>}
                 </div>
               </div>
               <button
@@ -1116,6 +998,9 @@ return (
                 <p className="text-xs">BrowserView 画面吸附中...</p>
               </div>
             </div>
+            <div className="bg-slate-900 border-t border-slate-800 px-2 py-1">
+              <TaskStatusMonitor activeTasks={[activeRunningTask].filter(Boolean)} compact />
+            </div>
           </div>
         )}
       </div>
@@ -1174,41 +1059,21 @@ return (
         </div>
 
         <div className="flex-1 bg-slate-950 rounded-2xl shadow-xl border border-slate-800 flex flex-col overflow-hidden relative">
-          <div className="p-3 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4">
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${isDryRun ? 'bg-amber-500 animate-pulse shadow-[0_0_8px_rgba(245,158,11,0.6)]' : 'bg-slate-600'}`}></div>
-              <span className={`text-[12px] font-black tracking-wider ${isDryRun ? 'text-amber-500' : 'text-slate-500'}`}>🛡️ 预览模式安全栓</span>
-            </div>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input type="checkbox" className="sr-only peer" checked={isDryRun} onChange={(e) => setIsDryRun(e.target.checked)} />
-              <div className="w-9 h-5 bg-slate-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-600 shadow-inner"></div>
-            </label>
-          </div>
-
           <div className="p-4 relative overflow-hidden bg-black flex flex-col justify-center items-center group cursor-pointer active:scale-[0.98] transition-transform" onClick={launchAllQueue}>
-            <div className={`absolute inset-0 transition-colors ${isDryRun ? 'bg-amber-900/20 group-hover:bg-amber-900/40' : 'bg-indigo-600/20 group-hover:bg-indigo-600/40'}`}></div>
-            <Activity size={24} className={`mb-1 animate-pulse ${isDryRun ? 'text-amber-500' : 'text-indigo-500'}`} />
-            <h2 className={`font-black text-lg tracking-widest relative z-10 drop-shadow-md ${isDryRun ? 'text-amber-400' : 'text-white'}`}>
-              {isDryRun ? '🛡️ 启动全队列预览' : '🚀 启动全队列发布'}
-            </h2>
+            <div className="absolute inset-0 transition-colors bg-indigo-600/20 group-hover:bg-indigo-600/40"></div>
+            <Activity size={24} className="mb-1 animate-pulse text-indigo-500" />
+            <h2 className="font-black text-lg tracking-widest relative z-10 drop-shadow-md text-white">
+              🚀 启动全队列发布</h2>
           </div>
           
           <div className="p-2 border-b border-slate-800 flex justify-between items-center bg-slate-900 border-t">
             <span className="text-[10px] font-bold text-slate-400">实时战况记录仪</span>
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-2">
-            {syncTasks.filter(t => t.status === '排队中' || t.status.includes('中') || t.status === '开始执行').map(task => (
-              <div key={task.historyId} className="p-2.5 rounded-lg border bg-indigo-950/20 border-indigo-900/50 backdrop-blur-sm">
-                <div className="flex justify-between items-start mb-1.5">
-                  <div className="flex flex-col pr-2">
-                    <span className="text-xs font-bold text-slate-200 truncate">{task.videoName}</span>
-                    <span className="text-[10px] text-slate-500 mt-0.5">{task.platform}</span>
-                  </div>
-                  <Loader2 size={14} className="text-indigo-400 animate-spin flex-shrink-0" />
-                </div>
-                <div className="text-[10px] font-mono text-indigo-400">[{task.time}] {task.status}</div>
-              </div>
-            ))}
+            <TaskStatusMonitor activeTasks={syncTasks.filter(t => t.status === '排队中' || t.status.includes('中') || t.status === '开始执行')} />
+            {syncTasks.filter(t => t.status === '排队中' || t.status.includes('中') || t.status === '开始执行').length === 0 && (
+              <div className="text-[10px] text-slate-600 text-center py-4">暂无活跃任务</div>
+            )}
           </div>
         </div>
       </div>

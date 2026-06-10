@@ -2,7 +2,8 @@
 import Database from 'better-sqlite3';
 import { app, ipcMain } from 'electron';
 import path from 'path';
-import fs from 'fs'; 
+import fs from 'fs';
+import { safeDeletePartition } from './safe-delete.js';
 import { format } from 'date-fns'; 
 
 let db = null;
@@ -129,6 +130,73 @@ export function initDatabase() {
         type TEXT DEFAULT '评论',
         status TEXT DEFAULT '未回复',
         reply_content TEXT
+      );
+    `);
+
+    // === 6. email_accounts ===
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS email_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        provider TEXT NOT NULL DEFAULT '自建邮局',
+        smtp_host TEXT NOT NULL,
+        smtp_port INTEGER NOT NULL DEFAULT 465,
+        imap_host TEXT NOT NULL,
+        imap_port INTEGER NOT NULL DEFAULT 993,
+        password_encrypted BLOB NOT NULL,
+        imap_secure INTEGER NOT NULL DEFAULT 1,
+        smtp_secure INTEGER NOT NULL DEFAULT 1,
+        avatar TEXT DEFAULT '',
+        unread_count INTEGER DEFAULT 0,
+        is_active INTEGER DEFAULT 1,
+        last_sync_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // === 7. email_messages ===
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS email_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL,
+        uid INTEGER NOT NULL,
+        folder TEXT NOT NULL DEFAULT 'INBOX',
+        message_id TEXT,
+        from_address TEXT NOT NULL,
+        from_name TEXT DEFAULT '',
+        to_address TEXT DEFAULT '',
+        cc TEXT DEFAULT '',
+        subject TEXT DEFAULT '',
+        body_html TEXT DEFAULT '',
+        body_text TEXT DEFAULT '',
+        preview TEXT DEFAULT '',
+        received_at DATETIME,
+        is_read INTEGER DEFAULT 0,
+        is_starred INTEGER DEFAULT 0,
+        has_attachments INTEGER DEFAULT 0,
+        attachments_meta TEXT DEFAULT '[]',
+        in_reply_to TEXT DEFAULT '',
+        references_ids TEXT DEFAULT '',
+        raw_headers TEXT DEFAULT '',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (account_id) REFERENCES email_accounts(id) ON DELETE CASCADE,
+        UNIQUE(account_id, uid, folder)
+      );
+    `);
+
+    // === 8. email_drafts ===
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS email_drafts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL,
+        to_address TEXT NOT NULL,
+        cc TEXT DEFAULT '',
+        subject TEXT NOT NULL,
+        body_html TEXT DEFAULT '',
+        in_reply_to_uid INTEGER,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (account_id) REFERENCES email_accounts(id) ON DELETE CASCADE
       );
     `);
 
@@ -274,9 +342,9 @@ export function registerDatabaseIPC() {
 
       // 删除对应的浏览器缓存文件夹，彻底清理残留数据
       const profilePath = path.join(app.getPath('userData'), 'playwright_profiles', `chrome_data_${id}`);
-      if (fs.existsSync(profilePath)) {
-        fs.rmSync(profilePath, { recursive: true, force: true });
-        console.log(`✅ 已彻底清理账号 ${id} 的浏览器会话缓存`);
+      await new Promise(r => setTimeout(r, 1500));
+      try { await safeDeletePartition(profilePath); } catch (e) {
+        console.warn('清理浏览器缓存失败:', e.message);
       }
 
       return { success: true };

@@ -5,6 +5,7 @@ import {
   Wand2, Clapperboard, Monitor, Film, ImageIcon, Palette,
 } from 'lucide-react';
 import { useAiTasks } from '../AiTaskContext';
+import usePersistentState from '../../../hooks/usePersistentState';
 
 const TOOL_META = {
   sv_talking_head: {
@@ -204,14 +205,6 @@ const ACCENT_MAP = {
   purple: { border: 'border-purple-400', bg: 'bg-purple-50', text: 'text-purple-700', bar: 'from-purple-500 to-violet-500' },
 };
 
-function usePersistentState(key, defaultValue) {
-  const [value, setValue] = useState(() => {
-    try { return window.localStorage.getItem(key) !== null ? JSON.parse(window.localStorage.getItem(key)) : defaultValue; }
-    catch (e) { return defaultValue; }
-  });
-  useEffect(() => { window.localStorage.setItem(key, JSON.stringify(value)); }, [key, value]);
-  return [value, setValue];
-}
 
 const PLACEHOLDER_ART = [
   'https://picsum.photos/seed/video1/800/600',

@@ -71,8 +71,6 @@ export class BaijiahaoAdapter {
       if (this.task.syncToutiao) await this.i.flexibleClick(['同步', '分发']);
     } catch (e) {}
 
-    if (this.task.dryRun) { this.broadcast('🛑 预览模式完成'); return; }
-
     await this.i.clickElement('[data-testid="publish-btn"], button:has-text("发布")');
     await sleep(8000);
   }

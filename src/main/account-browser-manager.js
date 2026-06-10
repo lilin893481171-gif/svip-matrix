@@ -14,6 +14,9 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { app } from 'electron';
 import { getDB } from './database.js';
+import { attachOnboardingSniffer, teardownOnboardingSniffer } from './account-onboarding.js';
+import { getTLSProxyRules, isTLSProxyRunning } from './tls-proxy-launcher.js';
+
 
 // ======================================
 // 0. 配置与全局状态
@@ -160,8 +163,11 @@ export function buildSessionEnvironmentScript(fp, accountId) {
 
     // ---- navigator 属性伪装 ----
     try {
+      // navigator.webdriver: 由 --disable-blink-features=AutomationControlled 从内核层抹除。
+      // 禁止在此定义 getter — 属性描述符的存在本身就是特征。
+      try { delete Navigator.prototype.webdriver; } catch(e) {}
+      try { delete navigator.webdriver; } catch(e) {}
       var navDefs = [
-        ['webdriver', undefined],
         ['hardwareConcurrency', nav.hardwareConcurrency || 8],
         ['deviceMemory', nav.deviceMemory || 8],
         ['platform', 'Win32'],
@@ -186,20 +192,57 @@ export function buildSessionEnvironmentScript(fp, accountId) {
       try {
         Object.defineProperty(Navigator.prototype, 'plugins', {
           get: function() {
-            var len = 5;
-            var arr = new Array(len);
-            for (var j = 0; j < len; j++) {
-              arr[j] = {
-                name: 'Chrome PDF Plugin',
-                filename: 'internal-pdf-viewer',
-                description: 'Portable Document Format',
-                length: 1,
-                item: function() { return null; },
-                namedItem: function() { return null; }
-              };
+            var _types = [
+              [{type:'application/pdf',description:'Portable Document Format',suffixes:'pdf'}],
+              [{type:'application/pdf',description:'',suffixes:'pdf'}],
+              [{type:'application/x-nacl',description:'Native Client Executable',suffixes:''},{type:'application/x-pnacl',description:'Portable Native Client Executable',suffixes:''}]
+            ];
+            var _names = ['Chrome PDF Plugin','Chrome PDF Viewer','Native Client'];
+            var _files = ['internal-pdf-viewer','mhjfbmdgcfjbbpaeojofohoefgiehjai','internal-nacl-plugin'];
+            var _descs = ['Portable Document Format','',''];
+            var plugins = [];
+            for (var pi = 0; pi < 3; pi++) {
+              (function(pIdx) {
+                var mimes = [];
+                for (var mi = 0; mi < _types[pIdx].length; mi++) {
+                  (function(mIdx) {
+                    var mime = { type: _types[pIdx][mIdx].type, description: _types[pIdx][mIdx].description, suffixes: _types[pIdx][mIdx].suffixes };
+                    Object.defineProperty(mime, 'enabledPlugin', { get: function() { return plugins[pIdx]; }, configurable: true });
+                    mimes.push(mime);
+                  })(mi);
+                }
+                var plugin = { name: _names[pIdx], filename: _files[pIdx], description: _descs[pIdx], length: mimes.length };
+                plugin.item = function(i) { return i < mimes.length ? mimes[i] : null; };
+                plugin.namedItem = function(n) { for (var k=0;k<mimes.length;k++) { if (mimes[k].type===n) return mimes[k]; } return null; };
+                // MimeTypeArray 兼容: plugins[pIdx][0] 可索引
+                for (var mi2 = 0; mi2 < mimes.length; mi2++) { plugin[mi2] = mimes[mi2]; }
+                plugins.push(plugin);
+              })(pi);
             }
-            Object.defineProperty(arr, 'length', { value: len });
-            return arr;
+            // PluginArray 兼容
+            plugins.item = function(i) { return i < plugins.length ? plugins[i] : null; };
+            plugins.namedItem = function(n) { for (var k=0;k<plugins.length;k++) { if (plugins[k].name===n) return plugins[k]; } return null; };
+            plugins.refresh = function() {};
+            for (var qi = 0; qi < plugins.length; qi++) { plugins[qi] = plugins[qi]; }
+            Object.defineProperty(plugins, 'length', { value: plugins.length });
+            return plugins;
+          },
+          configurable: true
+        });
+        Object.defineProperty(Navigator.prototype, 'mimeTypes', {
+          get: function() {
+            var plugins = navigator.plugins;
+            var mimes = [];
+            for (var i = 0; i < plugins.length; i++) {
+              for (var j = 0; j < plugins[i].length; j++) {
+                mimes.push(plugins[i][j]);
+              }
+            }
+            mimes.item = function(i) { return i < mimes.length ? mimes[i] : null; };
+            mimes.namedItem = function(n) { for (var k=0;k<mimes.length;k++) { if (mimes[k].type===n) return mimes[k]; } return null; };
+            for (var mi = 0; mi < mimes.length; mi++) { mimes[mi] = mimes[mi]; }
+            Object.defineProperty(mimes, 'length', { value: mimes.length });
+            return mimes;
           },
           configurable: true
         });
@@ -243,38 +286,7 @@ export function buildSessionEnvironmentScript(fp, accountId) {
       } catch(e) {}
     } catch(e) {}
 
-    // ---- Canvas 指纹无状态空间噪声 ----
-    try {
-    var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toDataURL = makeNative(function(type, quality) {
-      try {
-        if (this.width > 0 && this.height > 0) {
-          var offscreen = document.createElement('canvas');
-          offscreen.width = this.width;
-          offscreen.height = this.height;
-          var ctx2d = offscreen.getContext('2d', { willReadFrequently: true });
-          if (ctx2d) {
-            ctx2d.drawImage(this, 0, 0);
-            var imgData = ctx2d.getImageData(0, 0, offscreen.width, offscreen.height);
-            var d = imgData.data;
-            var numPixels = Math.min(10, Math.floor(d.length / 4));
-            for (var i = 0; i < numPixels; i++) {
-              var pixelIndex = (getStatelessNoise(__seed__, i * 999) >>> 0) % (offscreen.width * offscreen.height);
-              var dataIndex = pixelIndex * 4;
-              if (dataIndex < d.length) {
-                d[dataIndex] = d[dataIndex] ^ 1;
-              }
-            }
-            ctx2d.putImageData(imgData, 0, 0);
-            return origToDataURL.call(offscreen, type, quality);
-          }
-        }
-      } catch(e) {}
-      return origToDataURL.apply(this, arguments);
-    }, 'toDataURL');
-    } catch(e) {}
-
-    // ---- WebGL 1.0 & 2.0 指纹伪装 ----
+    // ---- WebGL 1.0 & 2.0 指纹伪装 (仅身份参数, 不碰像素数据/容量) ----
     try {
       var _vendor = wgl.vendor || 'Intel Inc.';
       var _renderer = wgl.renderer || 'Intel Iris OpenGL Engine';
@@ -285,49 +297,15 @@ export function buildSessionEnvironmentScript(fp, accountId) {
       var origGetExt = WebGLRenderingContext.prototype.getExtension;
       var origGetSuppExt = WebGLRenderingContext.prototype.getSupportedExtensions;
 
+      // 仅伪装 GPU 身份参数 (vendor/renderer/version)，不碰容量限制值
+      // 容量虚报会导致 WASM 按错误上限分配内存 → RuntimeError: memory access out of bounds
       var spoofed = new Map([
-        [37445, _vendor],
-        [37446, _renderer],
-        [7936, _vendor],
-        [7937, _renderer],
-        [7938, _version],
-        [35724, _slv],
-        [3379, 16384],
-        [3386, new Int32Array([16384, 16384])],
-        [34024, 16384],
-        [34076, 16384],
-        [34047, 16],
-        [34921, 16],
-        [36347, 4096],
-        [36348, 32],
-        [36349, 1024],
-        [35661, 80],
-        [35660, 16],
-        [34930, 16],
-        [33902, new Float32Array([1, 1])],
-        [33901, new Float32Array([1, 1024])],
-        [34964, 8],
-        [35658, 8],
-        [35659, 8],
-        [35663, 8],
-        [35662, 8],
-        [35664, 24],
-        [35665, 8],
-        [34467, new Uint32Array([0x83F0, 0x83F1, 0x83F2, 0x83F3, 0x9274])],
-        [34852, 8],
-        [36063, 8],
-        [36183, 16],
-        [35371, 14],
-        [35373, 14],
-        [35374, 28],
-        [35375, 72],
-        [35376, 65536],
-        [35377, 233472],
-        [35379, 233472],
-        [35981, 4294967295],
-        [35368, 128],
-        [35369, 4],
-        [35370, 4]
+        [37445, _vendor],   // UNMASKED_VENDOR_WEBGL
+        [37446, _renderer], // UNMASKED_RENDERER_WEBGL
+        [7936, _vendor],    // VENDOR
+        [7937, _renderer],  // RENDERER
+        [7938, _version],   // VERSION
+        [35724, _slv]       // SHADING_LANGUAGE_VERSION
       ]);
 
       WebGLRenderingContext.prototype.getExtension = makeNative(function(name) {
@@ -341,16 +319,8 @@ export function buildSessionEnvironmentScript(fp, accountId) {
         return origGetParam.call(this, p);
       }, 'getParameter');
 
-      var origReadPixels = WebGLRenderingContext.prototype.readPixels;
-      WebGLRenderingContext.prototype.readPixels = makeNative(function(x, y, width, height, format, type, pixels) {
-        origReadPixels.apply(this, arguments);
-        if (pixels && pixels.length > 0) {
-          for (var i = 0; i < pixels.length; i += 4) {
-            var noise = getStatelessNoise(__seed__, i) % 3;
-            pixels[i] = (pixels[i] + noise) % 256;
-          }
-        }
-      }, 'readPixels');
+      // readPixels 不碰 — 传入的 TypedArray 由 WASM 分配，越界修改会触发 memory access out of bounds
+      // 仅 getParameter 做身份伪装，不做像素修改
 
       if (typeof WebGL2RenderingContext !== 'undefined') {
         var origGetParam2 = WebGL2RenderingContext.prototype.getParameter;
@@ -368,18 +338,74 @@ export function buildSessionEnvironmentScript(fp, accountId) {
         WebGL2RenderingContext.prototype.getSupportedExtensions = makeNative(function() {
           return origGetSuppExt2.call(this);
         }, 'getSupportedExtensions');
-
-        var origReadPixels2 = WebGL2RenderingContext.prototype.readPixels;
-        WebGL2RenderingContext.prototype.readPixels = makeNative(function(x, y, width, height, format, type, pixels) {
-          origReadPixels2.apply(this, arguments);
-          if (pixels && pixels.length > 0) {
-            for (var i = 0; i < pixels.length; i += 4) {
-              var noise = getStatelessNoise(__seed__, i) % 3;
-              pixels[i] = (pixels[i] + noise) % 256;
-            }
-          }
-        }, 'readPixels');
       }
+    } catch(e) {}
+
+    // ---- Canvas 2D 指纹噪声 (toBlob / toDataURL / getImageData 全覆盖) ----
+    // 小红书 WAF 依赖 Canvas 哈希识别 GPU 渲染特征。对像素末尾字节加 ±1 噪声，
+    // 肉眼不可见但完全改变哈希值，打破基于 Canvas 指纹的设备追踪。
+    try {
+    (function() {
+      var ctxProto = CanvasRenderingContext2D.prototype;
+
+      // getImageData — 核心读取路径，toDataURL/toBlob 底层都走这里
+      var origGetImageData = ctxProto.getImageData;
+      ctxProto.getImageData = makeNative(function(x, y, w, h) {
+        var imageData = origGetImageData.call(this, x, y, w, h);
+        var data = imageData.data;
+        // 只改 alpha 通道最后一个 bit（±0 或 ±1），哈希彻底改变，视觉零影响
+        for (var i = 3; i < data.length; i += 4) {
+          var delta = (detRandom() > 0.5 ? 1 : -1);
+          var newVal = data[i] + delta;
+          data[i] = newVal < 0 ? 0 : (newVal > 255 ? 255 : newVal);
+        }
+        return imageData;
+      }, 'getImageData');
+
+      // toBlob — 走全流程重绘：创建临时 canvas + 噪声 putImageData → 原始 toBlob
+      if (ctxProto.toBlob) {
+        var origToBlob = ctxProto.toBlob;
+        ctxProto.toBlob = makeNative(function(type, quality) {
+          try {
+            var w = this.canvas.width;
+            var h = this.canvas.height;
+            if (w > 0 && h > 0) {
+              var rawData = origGetImageData.call(this, 0, 0, w, h);
+              var data = rawData.data;
+              for (var i = 3; i < data.length; i += 4) {
+                var delta = (detRandom() > 0.5 ? 1 : -1);
+                var newVal = data[i] + delta;
+                data[i] = newVal < 0 ? 0 : (newVal > 255 ? 255 : newVal);
+              }
+              this.putImageData(rawData, 0, 0);
+            }
+          } catch(e) {}
+          return origToBlob.call(this, type, quality);
+        }, 'toBlob');
+      }
+
+      // toDataURL — 确保噪声覆盖
+      if (ctxProto.toDataURL) {
+        var origToDataURL = ctxProto.toDataURL;
+        ctxProto.toDataURL = makeNative(function(type, quality) {
+          try {
+            var w = this.canvas.width;
+            var h = this.canvas.height;
+            if (w > 0 && h > 0) {
+              var rawData = origGetImageData.call(this, 0, 0, w, h);
+              var data = rawData.data;
+              for (var i = 3; i < data.length; i += 4) {
+                var delta = (detRandom() > 0.5 ? 1 : -1);
+                var newVal = data[i] + delta;
+                data[i] = newVal < 0 ? 0 : (newVal > 255 ? 255 : newVal);
+              }
+              this.putImageData(rawData, 0, 0);
+            }
+          } catch(e) {}
+          return origToDataURL.call(this, type, quality);
+        }, 'toDataURL');
+      }
+    })();
     } catch(e) {}
 
     // ---- AudioContext 指纹噪声 ----
@@ -528,23 +554,164 @@ export function buildSessionEnvironmentScript(fp, accountId) {
     })();
     } catch(e) {}
 
-    // ---- chrome.runtime 抹除 ----
-    if (typeof chrome === 'undefined') {
-      Object.defineProperty(window, 'chrome', { value: { runtime: {} }, writable: true, configurable: true });
-    } else if (!chrome.runtime) {
-      chrome.runtime = {};
+    // ---- Network Information API 伪装 (navigator.connection) ----
+    try {
+    if ('connection' in navigator) {
+      var _conn = navigator.connection;
+      if (_conn) {
+        var _spoofRtt = 50;
+        Object.defineProperty(_conn, 'rtt', { get: function() { return _spoofRtt + Math.round((detRandom() - 0.5) * 10); }, configurable: true });
+        Object.defineProperty(_conn, 'downlink', { get: function() { return 10; }, configurable: true });
+        Object.defineProperty(_conn, 'effectiveType', { get: function() { return '4g'; }, configurable: true });
+        Object.defineProperty(_conn, 'saveData', { get: function() { return false; }, configurable: true });
+      }
+    } else {
+      try {
+        Object.defineProperty(navigator, 'connection', {
+          get: function() { return { rtt: 50, downlink: 10, effectiveType: '4g', saveData: false, type: 'cellular' }; },
+          configurable: true
+        });
+      } catch(e) {}
     }
+    } catch(e) {}
 
-    // ---- 权限查询伪装 ----
+    // ---- Battery API 抹除 (高熵指纹向量) ----
+    try {
+    if (navigator.getBattery) {
+      navigator.getBattery = makeNative(function() {
+        return Promise.resolve({
+          charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1,
+          onchargingchange: null, onchargingtimechange: null, ondischargingtimechange: null, onlevelchange: null,
+          addEventListener: function() {}, removeEventListener: function() {}
+        });
+      }, 'getBattery');
+    }
+    } catch(e) {}
+
+    // ---- chrome.runtime 抹除 (真实结构而非空壳) ----
+    try {
+    (function() {
+      if (typeof chrome === 'undefined') {
+        var _chrome = { runtime: {} };
+        Object.defineProperty(window, 'chrome', { value: _chrome, writable: true, configurable: true });
+      } else if (!chrome.runtime) {
+        chrome.runtime = {};
+      }
+      // 填充标准 API 桩 — 存在但返回合理值，防止特征检测判定为篡改
+      var rt = chrome.runtime;
+      var noop = function() {};
+      var methods = {
+        connect: function() {
+          var port = { name: '', onMessage: { addListener: noop, removeListener: noop }, onDisconnect: { addListener: noop, removeListener: noop }, postMessage: noop, disconnect: noop };
+          return port;
+        },
+        sendMessage: function(extId, msg, opts, cb) {
+          var callback = typeof opts === 'function' ? opts : (typeof cb === 'function' ? cb : noop);
+          if (typeof callback === 'function') setTimeout(function() { callback(); }, 0);
+        },
+        getManifest: function() { return { version: '1.0', name: '' }; },
+        getURL: function(p) { return 'chrome-extension://' + (p || ''); },
+        getPlatformInfo: function(cb) { setTimeout(function() { cb({ os: 'win', arch: 'x86-64', nacl_arch: 'x86-64' }); }, 0); },
+        onMessage: { addListener: noop, removeListener: noop },
+        onConnect: { addListener: noop, removeListener: noop },
+        onInstalled: { addListener: noop, removeListener: noop },
+        id: undefined,
+        lastError: undefined
+      };
+      for (var k in methods) {
+        if (!(k in rt)) {
+          Object.defineProperty(rt, k, { value: methods[k], writable: true, configurable: true, enumerable: typeof methods[k] !== 'function' });
+        }
+      }
+    })();
+    } catch(e) {}
+
+    // ---- 权限查询伪装 (全覆盖) ----
+    try {
     var origQuery = window.navigator.permissions.query;
     if (origQuery) {
-      window.navigator.permissions.query = function(args) {
-        if (args.name === 'notifications' || args.name === 'midi' || args.name === 'camera') {
-          return Promise.resolve({ state: 'prompt', onchange: null });
+      // 补全 PermissionStatus 原型链 — 小红书 WAF 会检查原型是否为真实的 PermissionStatus，
+      // 返回纯对象 { state: 'prompt' } 会因缺少 onchange addEventListener 等方法被判定为自动化环境
+      var _psProto = null;
+      try {
+        // 先从真实 query 偷一个 PermissionStatus 做原型（导航到任何正常页面后都有）
+        origQuery.call(navigator.permissions, { name: 'notifications' }).then(function(real) {
+          if (real && real.constructor && real.constructor.prototype) {
+            _psProto = real.constructor.prototype;
+          }
+        }).catch(function(){});
+      } catch(e) {}
+
+      window.navigator.permissions.query = makeNative(function(args) {
+        var name = args && args.name;
+        // 所有可能被指纹采集的权限 → 返回 prompt (正常浏览器默认态)
+        if (name === 'notifications' || name === 'midi' || name === 'camera' ||
+            name === 'microphone' || name === 'geolocation' || name === 'clipboard-read' ||
+            name === 'clipboard-write' || name === 'payment-handler' || name === 'background-sync' ||
+            name === 'persistent-storage' || name === 'ambient-light-sensor' ||
+            name === 'accelerometer' || name === 'gyroscope' || name === 'magnetometer') {
+          return Promise.resolve().then(function() {
+            var fake = Object.create(_psProto || {});
+            Object.defineProperties(fake, {
+              state: { value: 'prompt', enumerable: true, configurable: true },
+              onchange: { value: null, enumerable: true, configurable: true, writable: true }
+            });
+            // addEventListener / removeEventListener 标准 EventTarget 方法
+            fake.addEventListener = function(type, listener) {};
+            fake.removeEventListener = function(type, listener) {};
+            return fake;
+          });
         }
         return origQuery.call(this, args);
-      };
+      }, 'query');
     }
+    } catch(e) {}
+
+    // ---- Notification API 伪装 ----
+    try {
+    if (typeof Notification !== 'undefined') {
+      Object.defineProperty(Notification, 'permission', {
+        get: function() { return 'default'; },
+        configurable: true
+      });
+    }
+    } catch(e) {}
+
+    // ---- chrome.loadTimes / chrome.csi 抹除 (Chrome 专有API，Electron 不暴露) ----
+    try {
+    if (typeof chrome !== 'undefined') {
+      if (!chrome.loadTimes) {
+        chrome.loadTimes = makeNative(function() {
+          return {
+            requestTime: Date.now() / 1000,
+            startLoadTime: Date.now() / 1000 - 0.5,
+            commitLoadTime: Date.now() / 1000 - 0.3,
+            finishDocumentLoadTime: Date.now() / 1000 - 0.1,
+            finishLoadTime: Date.now() / 1000,
+            firstPaintTime: Date.now() / 1000 - 0.2,
+            firstPaintAfterLoadTime: Date.now() / 1000 - 0.05,
+            navigationType: 'Other',
+            wasFetchedViaSpdy: false,
+            wasNpnNegotiated: false,
+            npnNegotiatedProtocol: 'unknown',
+            connectionInfo: 'http/1.1',
+            wasAlternateProtocolAvailable: false
+          };
+        }, 'loadTimes');
+      }
+      if (!chrome.csi) {
+        chrome.csi = makeNative(function() {
+          return { startE: Date.now() - 2000, onloadT: Date.now() - 1500, pageT: Math.random() * 500 + 500, tran: 15 };
+        }, 'csi');
+      }
+      if (!chrome.app) {
+        Object.defineProperty(chrome, 'app', {
+          value: { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } },
+          writable: true, configurable: true
+        });
+      }
+    }
+    } catch(e) {}
 
     // ---- MediaDevices 硬件型号伪装 (防物理隔离泄漏) ----
     try {
@@ -640,36 +807,31 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
   const headers = fingerprintData.headers || {};
   const sessionEnvironmentScript = buildSessionEnvironmentScript(fp, key);
 
-  try {
-    const partitionDir = path.join(app.getPath('userData'), 'Partitions', `chrome_data_${key}`);
-    if (fs.existsSync(partitionDir)) {
-      const sslFiles = ['TransportSecurity', 'CertificateRevocation', 'CertificateTransparency', 'Cookies-journal'];
-      for (const file of sslFiles) {
-        const filePath = path.join(partitionDir, file);
-        if (fs.existsSync(filePath)) {
-          try { fs.unlinkSync(filePath); } catch (e) {}
-        }
-      }
-      const cacheDir = path.join(partitionDir, 'Cache');
-      if (fs.existsSync(cacheDir)) {
-        try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch (e) {}
+  // SSL / 缓存清理（异步，不阻塞）
+  const partitionDir = path.join(app.getPath('userData'), 'Partitions', `chrome_data_${key}`);
+  if (fs.existsSync(partitionDir)) {
+    const sslFiles = ['TransportSecurity', 'CertificateRevocation', 'CertificateTransparency'];
+    for (const file of sslFiles) {
+      const filePath = path.join(partitionDir, file);
+      if (fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch (e) {}
       }
     }
-  } catch (e) {}
+  }
 
   const view = new BrowserView({
     webPreferences: {
       partition: `persist:chrome_data_${key}`,
       sandbox: true,
       contextIsolation: true,
-      webSecurity: false,
+      webSecurity: true,
       allowRunningInsecureContent: true
     }
   });
 
   mainWindow.addBrowserView(view);
-  // 初始离屏渲染尺寸 — 避免页面以 0x0 视口加载导致布局错乱
-  view.setBounds({ x: -10000, y: -10000, width: 1280, height: 800 });
+  // 初始离屏视口与 JS 层伪造分辨率 (1920x1080) 对齐，消除物理/逻辑分辨率指纹差异
+  view.setBounds({ x: -10000, y: -10000, width: 1920, height: 1080 });
   const wc = view.webContents;
 
   // 🌟 核心防御：Session 级 WebRTC 物理隔离 (国内直连模式) 🌟
@@ -686,14 +848,14 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
     if (message && message.includes('[Matrix Shield]')) {
       console.log(`[原生会话容器-诊断] ${prefix} ${message}`);
     }
+    if (level === 3) {
+      console.log(`[BV:JS_ERR] ${message}`);
+    }
   });
 
-  let sessionData = null;
-
-  try {
-    await wc.session.clearHostResolverCache();
-    await wc.session.clearCache();
-  } catch (e) {}
+  wc.on('page-error', (_event, message, source, lineno) => {
+    console.log(`[BV:PAGE_ERR] ${source}:${lineno} ${message}`);
+  });
 
   wc.setWindowOpenHandler(({ url }) => {
     wc.loadURL(url);
@@ -743,51 +905,57 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
     }
   });
 
-  const ua = fp.navigator?.userAgent ||
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+  // 动态读取 Chromium 版本号，确保 UA 与实际浏览器引擎匹配
+  const chromeVer = process.versions.chrome || '132.0.0.0';
+  const ua = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`;
   wc.setUserAgent(ua);
 
-  if (options.proxy) {
-    const proxyRules = parseProxyString(options.proxy);
-    if (proxyRules) {
-      try {
-        await wc.session.setProxy({ proxyRules });
-      } catch (e) {}
+  // 🔐 TLS 代理 (Node.js CONNECT 隧道)
+  if (isTLSProxyRunning()) {
+    try {
+      await wc.session.setProxy({
+        proxyRules: getTLSProxyRules(),
+        bypassRules: 'localhost;127.0.0.1;<local>',
+      });
+      console.log(`[会话容器] TLS 代理已挂载: ${getTLSProxyRules()}`);
+    } catch (e) {
+      console.warn('[会话容器] TLS 代理挂载失败:', e.message);
     }
   }
 
-  try {
-    if (!wc.debugger.isAttached()) {
-      wc.debugger.attach('1.3');
-    }
-  } catch (e) {}
+  if (options.proxy) {
+    console.log(`[会话容器] 账户代理已跳过（TLS 代理优先）: ${options.proxy}`);
+  }
 
-  await wc.loadURL('about:blank');
-  await sleep(500);
+  // ─── 会话引导：先 about:blank 初始化 persist: 分区存储层 ───
+  //   直接加载微信等重定向站点会因存储层未就绪而 ERR_ABORTED(-3)
 
-  // --- CDP 注入与底层管控 ---
+  // CDP 调试器在 first paint 前挂载
+  try { if (!wc.debugger.isAttached()) wc.debugger.attach('1.3'); } catch (e) {}
+
+  await new Promise((resolve) => {
+    const done = () => { wc.removeListener('did-finish-load', done); resolve(); };
+    wc.on('did-finish-load', done);
+    wc.loadURL('about:blank');
+  });
+
+  // --- CDP 注入（分区存储层已就绪，可安全注册脚本）---
   try {
     if (wc.debugger.isAttached()) {
       await wc.debugger.sendCommand('Page.enable');
-
       await wc.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
         source: sessionEnvironmentScript
       });
-      console.log('[Session Manager] CDP CDP 会话环境脚本已注入');
+      await wc.debugger.sendCommand('Network.setBlockedURLs', {
+        urls: ['*://*.stun.*/*', '*://*.turn.*/*', 'stun:*', 'turn:*', '*://*stun*:*/*', '*://*turn*:*/*']
+      });
+      console.log('[Session Manager] CDP 会话环境脚本已注入');
     } else {
       await wc.executeJavaScript(sessionEnvironmentScript);
     }
   } catch (e) {
     try { await wc.executeJavaScript(sessionEnvironmentScript); } catch (e2) {}
   }
-
-  try {
-    if (wc.debugger.isAttached()) {
-      await wc.debugger.sendCommand('Network.setBlockedURLs', {
-        urls: ['*://*.stun.*/*', '*://*.turn.*/*', 'stun:*', 'turn:*', '*://*stun*:*/*', '*://*turn*:*/*']
-      });
-    }
-  } catch (e) {}
 
   const [winW, winH] = mainWindow.getSize();
   view.setBounds({ x: -10000, y: -10000, width: Math.round(winW * 0.5), height: Math.round(winH * 0.7) });
@@ -796,21 +964,40 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
     try {
       const ses = wc.session;
       ses.webRequest.onBeforeSendHeaders((details, callback) => {
+        // 跳过文件上传请求 — multipart/form-data 的 boundary 和 Cookie 由 Chromium 托管
+        const ct = (details.requestHeaders || {})['Content-Type'] || '';
+        if (ct.includes('multipart/form-data')) {
+          callback({ cancel: false });
+          return;
+        }
+        // 原地修改，不 pass back requestHeaders — Cookie 在 Chromium 网络栈中晚于
+        // onBeforeSendHeaders 注入，显式传回会清掉尚未附加的 Cookie 导致 401/跳登录
         details.requestHeaders['Accept-Language'] = headers['accept-language'];
-        callback({ requestHeaders: details.requestHeaders });
+        callback({ cancel: false });
       });
     } catch (e) {}
   }
 
-  sessionData = {
+  let sessionData = {
     view,
     webContents: wc,
     mainWindow,
     accountId,
     fingerprintData,
-    currentUrl: 'about:blank'
+    currentUrl: options.targetUrl || 'about:blank'
   };
   activeSessions.set(key, sessionData);
+
+  // ─── 加载目标 URL ───
+  if (options.targetUrl) {
+    wc.loadURL(options.targetUrl);
+  }
+
+  // ─── 入网嗅探：启动 API 拦截 + DOM 兜底 ───
+  const { platform } = options;
+  if (platform) {
+    attachOnboardingSniffer(wc, accountId, platform);
+  }
 
   return { success: true, webContents: wc, view };
 }
@@ -854,6 +1041,9 @@ export async function closeEmbeddedAccountBrowser(accountId) {
   const key = String(accountId);
   const session = activeSessions.get(key);
   if (!session) return;
+
+  // 清理入网嗅探
+  teardownOnboardingSniffer(key);
 
   try {
     if (session.view) {

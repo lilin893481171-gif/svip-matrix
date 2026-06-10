@@ -2,7 +2,28 @@
  * @file rpa/browser-controller.js
  * BrowserView 会话引擎 — 纯 Electron 原生 API，零 CDP 依赖
  */
-import { BrowserWindow, BrowserView } from 'electron';
+import { BrowserWindow, BrowserView, app } from 'electron';
+import { existsSync, mkdirSync, copyFileSync, readdirSync, statSync } from 'fs';
+import { join } from 'path';
+import { teardownSessionAndClean } from '../safe-delete.js';
+import { getTLSProxyRules, isTLSProxyRunning, isCAInstalled } from '../tls-proxy-launcher.js';
+
+// 递归复制分区目录 — Session Storage / Local Storage 是目录层级，
+// copyFileSync 遇到目录直接抛错，必须递归处理
+function copyRecursive(src, dst) {
+  if (!existsSync(src)) return;
+  const st = statSync(src);
+  if (st.isDirectory()) {
+    mkdirSync(dst, { recursive: true });
+    const entries = readdirSync(src);
+    for (const entry of entries) {
+      copyRecursive(join(src, entry), join(dst, entry));
+    }
+  } else {
+    mkdirSync(join(dst, '..'), { recursive: true });
+    copyFileSync(src, dst);
+  }
+}
 
 import { NativeInteractions } from '../native-interactions.js';
 import { getOrCreateSessionProfile, buildSessionEnvironmentScript } from '../account-browser-manager.js';
@@ -22,6 +43,9 @@ const sleep = (ms, wc = null) => {
 export class BrowserController {
   constructor(accountId) {
     this.accountId = accountId;
+    // 🔑 独立分区：加 _rpa 后缀，避免与账户浏览器共享 Cookie 存储
+    // 共享分区会导致两个 BrowserView 竞争 SQLite WAL，损坏 Cookie → 登录态丢失
+    this.partitionKey = `chrome_data_${accountId}_rpa`;
     this.view = null;
     this.mainWindow = null;
     this.webContents = null;
@@ -33,17 +57,44 @@ export class BrowserController {
     if (windows.length === 0) throw new Error("主窗口未找到");
     this.mainWindow = windows[0];
 
+    // 🔑 从账户浏览器分区复制 Cookie 到 RPA 独立分区
+    // 这样 RPA 有完整登录态，同时不会污染账户浏览器
+    const userDataPath = app.getPath('userData');
+    const srcPartition = join(userDataPath, 'Partitions', `chrome_data_${this.accountId}`);
+    const dstPartition = join(userDataPath, 'Partitions', this.partitionKey);
+
+    if (existsSync(srcPartition)) {
+      try {
+        mkdirSync(dstPartition, { recursive: true });
+        // 全量复制会话数据（排除大体积缓存目录）
+        const SKIP = new Set(['Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'blob_storage', 'WebStorage']);
+        const entries = readdirSync(srcPartition);
+        for (const name of entries) {
+          if (SKIP.has(name)) continue;
+          const src = join(srcPartition, name);
+          try { copyRecursive(src, join(dstPartition, name)); } catch (e) {
+            console.warn(`[BrowserController] 复制 ${name} 失败:`, e.message);
+          }
+        }
+        console.log(`[BrowserController] 会话分区已完整复制到 RPA 独立分区 (跳过缓存)`);
+      } catch (e) {
+        console.warn('[BrowserController] Cookie 复制失败:', e.message);
+      }
+    }
+
     this.view = new BrowserView({
       webPreferences: {
-        partition: `persist:chrome_data_${this.accountId}`,
+        partition: `persist:${this.partitionKey}`,
         sandbox: true,
         contextIsolation: true,
-        webSecurity: false
+        webSecurity: true,
+        allowRunningInsecureContent: true
       }
     });
 
     this.mainWindow.addBrowserView(this.view);
-    this.view.setBounds({ x: -10000, y: -10000, width: 1280, height: 800 });
+    // 视口与 JS 层伪造的屏幕分辨率 (1920x1080) 对齐，消除物理/逻辑分辨率指纹差异
+    this.view.setBounds({ x: -10000, y: -10000, width: 1920, height: 1080 });
 
     this.webContents = this.view.webContents;
 
@@ -61,7 +112,47 @@ export class BrowserController {
       return { action: 'deny' };
     });
 
-    this.webContents.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36');
+    // 🔑 权限全开 — 防止 Chromium 静默拒绝导致页面内部状态机卡死
+    // 小红书上传后需要: autoplay(视频预览解码) / clipboard(复制链接) / notifications 等
+    const permHandler = (_webContents, permission, callback, details) => {
+      // 所有权限请求均授权，避免静默拒绝阻塞页面渲染管线
+      callback(true);
+    };
+    this.webContents.session.setPermissionRequestHandler(permHandler);
+
+    // setPermissionCheckHandler — 阻止页面自主查询权限状态时拿到 denied
+    // 某些 React SPA 在 PermissionStatus 为 denied 时会隐藏上传按钮
+    if (typeof this.webContents.session.setPermissionCheckHandler === 'function') {
+      this.webContents.session.setPermissionCheckHandler((_wc, permission) => true);
+    }
+
+    // UA 与 Electron 39 内置 Chromium 132 保持一致，避免平台深度环境校验检测到版本不匹配
+    const chromeVersion = process.versions.chrome || '132.0.0.0';
+    this.webContents.setUserAgent(
+      `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
+    );
+
+    // 🔐 TLS 指纹伪装代理：RPA 发布流量经 uTLS 代理中转 (JA3→Chrome133)
+    if (isTLSProxyRunning()) {
+      try {
+        await this.webContents.session.setProxy({
+          proxyRules: getTLSProxyRules(),
+          proxyBypassRules: '*.xhscdn.com'
+        });
+      } catch (e) {
+        console.warn('[BrowserController] TLS 代理挂载失败:', e.message);
+      }
+    }
+
+    // 🚫 拦截平台 APM/监控/埋点上报 — 避免 disable-http2 导致 SSL 协议错误刷屏
+    this.webContents.session.webRequest.onBeforeRequest(
+      { urls: [
+        '*://apm-fe.xiaohongshu.com/*',
+        '*://apm.xiaohongshu.com/*',
+        '*://t2.xiaohongshu.com/api/v2/collect*'
+      ] },
+      (_details, callback) => callback({ cancel: true })
+    );
 
     await this.webContents.loadURL('about:blank');
 
@@ -128,7 +219,14 @@ export class BrowserController {
       } catch (e) {}
     });
 
-    this.nativeInteractions = new NativeInteractions(this.webContents);
+    this.nativeInteractions = new NativeInteractions(this.webContents, this.mainWindow);
+
+    // 防检测加固：指纹伪装 + Canvas/Audio 噪声
+    try {
+      await this.nativeInteractions.applyFingerprintHardening();
+    } catch (e) {
+      console.warn('[BrowserController] 指纹加固注入失败:', e.message);
+    }
 
     return { webContents: this.webContents, interactions: this.nativeInteractions };
   }
@@ -142,25 +240,23 @@ export class BrowserController {
 
   detachFromWindow() {
     if (this.mainWindow && this.view) {
-      this.view.setBounds({ x: -10000, y: -10000, width: 1280, height: 800 });
+      this.view.setBounds({ x: -10000, y: -10000, width: 1920, height: 1080 });
     }
   }
 
   async close() {
-    if (this.mainWindow && this.view) {
-      try { this.mainWindow.removeBrowserView(this.view); } catch (e) {}
-    }
-    if (this.webContents) {
-      try {
-        if (this.webContents.debugger.isAttached()) {
-          this.webContents.debugger.detach();
-        }
-      } catch (e) {}
-      try { this.webContents.close(); } catch (e) {}
+    try {
+      const dstPartition = join(app.getPath('userData'), 'Partitions', this.partitionKey);
+      if (existsSync(dstPartition)) {
+        await teardownSessionAndClean(this.mainWindow, this.view, dstPartition, this.partitionKey);
+      }
+    } catch (e) {
+      console.warn('[BrowserController] 拆除失败:', e.message);
+    } finally {
+      this.view = null;
       this.webContents = null;
+      this.nativeInteractions = null;
     }
-    this.view = null;
-    this.nativeInteractions = null;
   }
 
   async verifyFingerprint() {

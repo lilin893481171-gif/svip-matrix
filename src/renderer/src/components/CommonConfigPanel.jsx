@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { toMatrixMediaUrl } from '../utils/safePath';
 
 export default function CommonConfigPanel({ config, onChange, activeVideo }) {
   const cfg = config || {};
@@ -9,8 +10,8 @@ export default function CommonConfigPanel({ config, onChange, activeVideo }) {
   const tags = (cfg.tags || '').split(/\s+/).filter(Boolean);
   const firstComment = cfg.firstComment || '';
   const scheduled = cfg.scheduled || false;
-  const scheduleType = cfg.scheduleType || 'now'; // 'now' | 'platform' | 'local'
-  const coverPath = cfg.coverPath || '';
+  const scheduleType = cfg.scheduleType || 'now';
+  const coverSrc = toMatrixMediaUrl(cfg.coverUrl || cfg.coverPath);
   const [tagInput, setTagInput] = useState('');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
 
@@ -43,7 +44,7 @@ export default function CommonConfigPanel({ config, onChange, activeVideo }) {
   return (
     <div className="w-full max-w-[620px] bg-white rounded-xl p-8 shadow-[0_4px_24px_rgba(0,0,0,0.04)] border border-gray-100 font-sans text-[14px] text-gray-800 animate-in fade-in duration-300">
       <div className="mb-8 border-b border-gray-100 pb-4 flex justify-between items-center">
-        <h2 className="text-xl font-bold text-gray-900">核心基座数据</h2>
+        <h2 className="text-xl font-bold text-gray-900">所有平台统一设置发布编辑</h2>
         <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded font-medium border border-purple-100">
           AI 智能中枢已就绪
         </span>
@@ -51,21 +52,19 @@ export default function CommonConfigPanel({ config, onChange, activeVideo }) {
 
       <div className="space-y-6">
 
-        {/* ================= 1. 通用封面 (横/竖双封面) ================= */}
+        {/* ================= 1. 主视觉区域：横封面 + 竖封面 ================= */}
         <div className="flex items-start">
           <div className="w-[80px] flex-shrink-0 pt-1 text-right pr-4 text-gray-600 font-medium">主视觉</div>
           <div className="flex gap-6 flex-1">
-            {/* 封面 1 (已上传状态) */}
+            {/* 横板封面 */}
             <div>
               <div className="w-[104px] h-[104px] border border-gray-200 rounded-xl p-1.5 flex flex-col items-center justify-center cursor-pointer hover:border-purple-500 transition-colors relative overflow-hidden group shadow-sm">
-                {coverPath ? (
-                  <img src={`file:///${coverPath.replace(/\\/g, '/')}`} className="w-full h-full object-cover rounded-lg" alt="cover" />
-                ) : activeVideo && (activeVideo.videoPath || activeVideo.path) ? (
-                  <img src={`file:///${(activeVideo.videoPath || activeVideo.path || '').replace(/\\/g, '/')}`} className="w-full h-full object-cover rounded-lg opacity-50" alt="video" />
+                {coverSrc ? (
+                  <img src={coverSrc} className="w-full h-full object-cover rounded-lg" alt="cover" />
                 ) : (
                   <div className="flex flex-col items-center text-gray-400">
                     <span className="text-xl leading-none">+</span>
-                    <span className="text-xs mt-1">横版封面</span>
+                    <span className="text-xs mt-1">横板封面</span>
                   </div>
                 )}
                 <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm">
@@ -75,7 +74,7 @@ export default function CommonConfigPanel({ config, onChange, activeVideo }) {
               </div>
             </div>
 
-            {/* 封面 2 (空状态) */}
+            {/* 竖版封面 */}
             <div>
               <div className="w-[104px] h-[104px] border border-dashed border-gray-300 bg-gray-50 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-purple-500 hover:bg-purple-50 transition-colors">
                 <span className="text-gray-400 text-xl leading-none">+</span>

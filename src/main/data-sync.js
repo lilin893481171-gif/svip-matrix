@@ -15,12 +15,16 @@ import { syncKuaishouData } from './sync/kuaishou.js';
 
 export function registerDataSyncIPC() {
   ipcMain.handle('sync-30days-data', async (event, { accountId, platform }) => {
-    if (platform === '抖音') return await syncDouyinData(accountId);
-    if (platform === '小红书') return await syncXiaohongshuData(accountId);
-    if (platform === 'B站') return await syncBilibiliData(accountId);
-    if (platform === '微信视频号') return await syncWechatChannelsData(accountId);
-    if (platform === '百家号') return await syncBaijiahaoData(accountId);
-    if (platform === '快手') return await syncKuaishouData(accountId);
-    return { success: false, message: `暂不支持 ${platform} 同步` };
+    try {
+      if (platform === '抖音') return await syncDouyinData(accountId);
+      if (platform === '小红书') return await syncXiaohongshuData(accountId);
+      if (platform === 'B站') return await syncBilibiliData(accountId);
+      if (platform === '微信视频号') return await syncWechatChannelsData(accountId);
+      if (platform === '百家号') return await syncBaijiahaoData(accountId);
+      if (platform === '快手') return await syncKuaishouData(accountId);
+      return { success: false, message: `暂不支持 ${platform} 同步` };
+    } catch (err) {
+      return { success: false, message: err.message };
+    }
   });
 }
