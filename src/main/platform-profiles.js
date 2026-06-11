@@ -21,14 +21,21 @@ export const PLATFORM_PROFILES = {
       {
         pattern: '/api/sns/',
         parse(json) {
-          const d = json?.data;
-          if (!d || !d.name) return null;
+          const root = json?.data;
+          if (!root) return null;
+          // basic_info 子结构（selfinfo 等端点）
+          const basic = root.basic_info || root;
+          const name = basic.name || basic.nickname || basic.screen_name || '';
+          if (!name) return null;
+          const uid = basic.red_num || basic.red_id || basic.user_id || basic.userid ||
+                      basic.uid || basic.mid || basic.account_id || basic.redId ||
+                      root.red_num || root.red_id || root.user_id || '';
           return {
-            real_name: d.name || '',
-            avatar: d.avatar || '',
-            user_id: d.red_num || d.red_id || '',
-            followers: d.fans_count || d.fans || 0,
-            total_views: d.faved_count || d.liked_count || 0
+            real_name: name,
+            avatar: basic.avatar || basic.images || basic.imageb || basic.head_img_url || '',
+            user_id: String(uid),
+            followers: basic.fans_count || root.fans_count || basic.fans || 0,
+            total_views: basic.faved_count || root.faved_count || basic.liked_count || 0
           };
         }
       }
@@ -37,12 +44,30 @@ export const PLATFORM_PROFILES = {
       try {
         var n = document.querySelector('.user-name,.nickname,.name,[class*=user-name],[class*=nickname],.creator-name');
         var a = document.querySelector('.user-info img,.avatar img,.user-avatar img,[class*=avatar] img');
-        var fid = document.querySelector('[class*=red-id],.red-id,.user-id');
+        // 多策略提取小红书号
+        var uid = '';
+        var fid = document.querySelector('[class*=red-id],[class*=redId],.red-id,.user-id,[class*=user-id]');
+        if(fid) uid = fid.textContent.trim().replace(/[^\\d]/g,'');
+        if(!uid){
+          var bodyText = document.body.innerText || '';
+          var m = bodyText.match(/(?:小红书号|红书号|Red\\s*ID)[：:]*\\s*([\\w\\d]+)/i);
+          if(m) uid = m[1];
+        }
+        if(!uid){
+          var allSpans = document.querySelectorAll('span,div,p');
+          for(var i=0;i<allSpans.length;i++){
+            var t = allSpans[i].textContent.trim();
+            if(/^小红书号/.test(t)){
+              var nm = t.match(/[\\d]{5,}/);
+              if(nm){ uid = nm[0]; break; }
+            }
+          }
+        }
         var f = document.querySelector('[class*=fans],[class*=follower]');
         return {
           real_name: n ? n.textContent.trim() : '',
           avatar: a ? a.src : '',
-          user_id: fid ? fid.textContent.trim().replace(/[^\\d]/g,'') : '',
+          user_id: uid,
           followers: f ? parseInt((f.textContent.match(/[\\d,.]+[万wW]?/)||['0'])[0].replace(/,/g,'')) || 0 : 0
         };
       } catch(e) { return null; }
