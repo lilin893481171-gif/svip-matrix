@@ -25,7 +25,37 @@ const PLATFORM_KEY = {
   '微信视频号': 'wechat-channels'
 };
 
-const MANIFEST_URL = 'https://raw.githubusercontent.com/lilin893481171-gif/svip-matrix/main/rpa-scripts/manifest.json';
+const REPO_OWNER = 'lilin893481171-gif';
+const REPO_NAME = 'svip-matrix';
+const SCRIPTS_PATH = 'rpa-scripts';
+
+// GitHub API for private repos — needs GITHUB_TOKEN or GH_TOKEN env var
+function getGithubToken() {
+  return process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '';
+}
+
+/**
+ * Fetch file from GitHub — supports both public (raw) and private (API + token) repos.
+ * @param {string} path - e.g. 'rpa-scripts/manifest.json'
+ */
+async function ghFetch(path) {
+  const token = getGithubToken();
+  if (token) {
+    // Private repo: use GitHub API with token
+    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github.v3.raw' },
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok) throw new Error('GitHub API ' + res.status);
+    return res;
+  }
+  // Public repo: use raw URL
+  const url = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/${path}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res;
+}
 
 // ==========================================
 // ScriptManager 单例
@@ -155,8 +185,7 @@ export class ScriptManager {
   static async #checkForUpdates() {
     let remoteManifest;
     try {
-      const res = await fetch(MANIFEST_URL, { signal: AbortSignal.timeout(15000) });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const res = await ghFetch(SCRIPTS_PATH + '/manifest.json');
       remoteManifest = await res.json();
     } catch (e) {
       console.warn('[ScriptManager] 无法拉取 manifest:', e.message);
@@ -187,9 +216,7 @@ export class ScriptManager {
       console.log(`[ScriptManager] 发现新版本: ${platform} v${localVersion} → v${info.version}`);
 
       try {
-        const url = info.url || `https://raw.githubusercontent.com/lilin893481171-git/svip-matrix/main/rpa-scripts/${key}.mjs`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const res = await ghFetch(SCRIPTS_PATH + '/' + key + '.mjs');
         const code = await res.text();
 
         // SHA256 校验
