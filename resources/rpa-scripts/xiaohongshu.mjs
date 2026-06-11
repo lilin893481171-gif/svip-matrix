@@ -14,7 +14,7 @@
  *   5. 封面是弹窗流：入口 → modal → upload-btn → 文件 → 确定
  *   6. 发布按钮是 <xhs-publish-btn> 自定义元素
  */
-export const meta = { platform: '小红书', version: 7, minAppVersion: '2.0.0' };
+export const meta = { platform: '小红书', version: 13, minAppVersion: '2.0.0' };
 
 const sleep = (ms, wc = null) => {
   const jitter = ms * 0.3; // ±30% 随机偏移，模拟真人节奏
@@ -42,6 +42,11 @@ export class XiaohongshuAdapter {
 
   async execute() {
     this.broadcast('🚀 小红书发布 v7...');
+    console.log('[XHS] task fields:', JSON.stringify({
+      title: this.task.title, desc: (this.task.desc || '').substring(0, 30),
+      scheduled: this.task.scheduled, scheduleTime: this.task.scheduleTime,
+      coverPath: this.task.coverPath, videoPath: this.task.videoPath
+    }));
 
     // ── 1. 导航 ──
     await this.i.gentleCloseOverlays();
@@ -81,6 +86,7 @@ export class XiaohongshuAdapter {
     }
 
     // ── 7. 封面 ──
+    console.log('[XHS] coverPath =', JSON.stringify(this.task.coverPath), 'videoPath =', JSON.stringify(this.task.videoPath));
     if (this.task.coverPath) {
       await this._setCover(this.task.coverPath);
     }
@@ -88,6 +94,11 @@ export class XiaohongshuAdapter {
     // ── 8. 附加选项 ──
     if (this.task.poi) await this._setPoi(this.task.poi);
     if (this.task.isOriginal) await this._toggleOriginal();
+
+    // ── 8.5 定时发布 ──
+    if (this.task.scheduleTime || this.task.scheduled) {
+      await this._setSchedule(this.task.scheduleTime);
+    }
 
     if (this.task.dryRun) {
       this.broadcast('🛑 预览模式，不发布');
@@ -213,6 +224,7 @@ export class XiaohongshuAdapter {
    */
   async _fillEditor(desc, tagsStr) {
     this.broadcast('✍️ 描述与标签...');
+    console.log('[XHS] _fillEditor:', JSON.stringify({ desc: (desc || '').substring(0, 60), tags: tagsStr }));
 
     // 找编辑器并点击聚焦（坐标点击，不是 JS .focus())
     const clicked = await this._clickEditor();
@@ -254,14 +266,44 @@ export class XiaohongshuAdapter {
   async _clickEditor() {
     const box = await this.i.evaluate(`
       (function() {
+        // 策略1: contenteditable（ProseMirror/Draft.js/Quill 等富文本编辑器）
         var el = document.querySelector('[contenteditable="true"]');
-        if (!el || !el.offsetParent) return null;
-        el.scrollIntoView({ block: 'center', behavior: 'instant' });
-        var r = el.getBoundingClientRect();
-        return { x: r.x, y: r.y, w: r.width, h: r.height };
+        if (el && el.offsetParent) {
+          el.scrollIntoView({ block: 'center', behavior: 'instant' });
+          var r = el.getBoundingClientRect();
+          if (r.width > 80 && r.height > 15) return { x: r.x, y: r.y, w: r.width, h: r.height, via: 'contenteditable' };
+        }
+        // 策略2: role="textbox"
+        var tb = document.querySelector('[role="textbox"]');
+        if (tb && tb.offsetParent) {
+          tb.scrollIntoView({ block: 'center', behavior: 'instant' });
+          var r2 = tb.getBoundingClientRect();
+          if (r2.width > 80 && r2.height > 15) return { x: r2.x, y: r2.y, w: r2.width, h: r2.height, via: 'role-textbox' };
+        }
+        // 策略3: textarea（非标题 input）
+        var tas = document.querySelectorAll('textarea');
+        for (var i = 0; i < tas.length; i++) {
+          if (tas[i].offsetParent) {
+            var r3 = tas[i].getBoundingClientRect();
+            if (r3.width > 100 && r3.height > 30) {
+              return { x: r3.x, y: r3.y, w: r3.width, h: r3.height, via: 'textarea' };
+            }
+          }
+        }
+        // 策略4: 在标题 input 之后的 div（XHS 编辑器常是 div 结构）
+        var titleInput = document.querySelector('input[placeholder*="标题"]');
+        if (titleInput) {
+          var next = titleInput.closest('.publish-page-content, [class*="publish"]')?.querySelector('div[contenteditable], div[class*="editor"], div[class*="input-box"]');
+          if (next && next.offsetParent) {
+            var r4 = next.getBoundingClientRect();
+            if (r4.width > 100 && r4.height > 20) return { x: r4.x, y: r4.y, w: r4.width, h: r4.height, via: 'editor-div' };
+          }
+        }
+        return null;
       })();
     `).catch(() => null);
 
+    console.log('[XHS] _clickEditor:', box);
     if (box && box.w > 0 && box.h > 0) {
       await this.i.humanClickAtCoordinates(box.x + box.w * 0.3, box.y + box.h * 0.2);
       await sleep(500);
@@ -385,7 +427,7 @@ export class XiaohongshuAdapter {
 
       if (btnRect) {
         this.broadcast('📍 点击"修改封面"按钮...');
-        await this.i.humanClickAtCoordinates(btnRect.x + btnRect.w * 0.5, btnRect.y + btnRect.h * 0.5);
+        await this.i.humanClickAtCoordinates(btnRect.x, btnRect.y);
         btnClicked = true;
       }
 
@@ -634,6 +676,334 @@ export class XiaohongshuAdapter {
 
     await sleep(500);
     this.broadcast('✅ 原创声明完成');
+  }
+
+  /**
+   * 定时发布 — 开启定时开关 + 填写时间
+   * scheduleTime 格式: "2026-06-11T14:30" (datetime-local 输入值)
+   */
+  async _setSchedule(scheduleTime) {
+    if (!scheduleTime) return;
+    this.broadcast('⏰ 设置定时发布: ' + scheduleTime);
+
+    // Step 1: 点击定时发布开关 — 精准定位 custom-switch-wrapper 内的 checkbox
+    const toggled = await this.i.evaluate(`
+      (function() {
+        var wrappers = document.querySelectorAll('.custom-switch-wrapper');
+        for (var i = 0; i < wrappers.length; i++) {
+          var tip = wrappers[i].querySelector('.has-tips, .custom-switch-text-content');
+          if (tip && tip.textContent.indexOf('定时') >= 0) {
+            var cb = wrappers[i].querySelector('input[type="checkbox"]');
+            if (cb && !cb.checked) { cb.click(); return 'checkbox'; }
+            if (cb && cb.checked) return 'already_on';
+            // 没有 checkbox，点整个 card
+            var card = wrappers[i].querySelector('.custom-switch-card');
+            if (card) { card.click(); return 'card'; }
+            wrappers[i].click();
+            return 'wrapper';
+          }
+        }
+        return null;
+      })()
+    `).catch(() => null);
+    console.log('[小红书] 定时开关结果:', toggled);
+    if (!toggled) {
+      this.broadcast('⚠️ 未找到定时发布开关');
+      return;
+    }
+    await sleep(2000);
+
+    // Step 2: 扫描 post-time-wrapper 内的时间选择器
+    const pickerDebug = await this.i.evaluate(`
+      (function() {
+        var wrapper = document.querySelector('.post-time-wrapper');
+        if (!wrapper) return { error: 'no post-time-wrapper' };
+        var info = { visible: wrapper.offsetParent !== null, children: [] };
+        var all = wrapper.querySelectorAll('*');
+        for (var i = 0; i < all.length && info.children.length < 40; i++) {
+          var el = all[i];
+          var r = el.getBoundingClientRect();
+          info.children.push({
+            tag: el.tagName,
+            cls: String(el.className || '').substring(0, 100),
+            txt: (el.textContent || '').trim().substring(0, 40),
+            type: el.type || '',
+            role: el.getAttribute('role') || '',
+            vis: el.offsetParent !== null,
+            w: Math.round(r.width), h: Math.round(r.height),
+            placeholder: el.placeholder || ''
+          });
+        }
+        return info;
+      })()
+    `).catch(e => ({ error: e.message }));
+    console.log('[小红书] 时间选择器 DOM:', JSON.stringify(pickerDebug, null, 2));
+
+    // Step 3: 解析时间
+    const [datePart, timePart] = scheduleTime.split('T');
+    const [year, month, day] = datePart.split('-');
+    const [hour, minute] = timePart.split(':');
+
+    // Step 4: 在 post-time-wrapper 内找可交互元素并填入时间
+    const filled = await this.i.evaluate(`
+      (function() {
+        var wrapper = document.querySelector('.post-time-wrapper');
+        if (!wrapper) return 'no_wrapper';
+
+        // 策略A: antd DatePicker 输入框
+        var pickerInput = wrapper.querySelector('input[class*="picker"], .ant-picker input, input[placeholder*="日期"], input[placeholder*="时间"], input[placeholder*="选择"]');
+        if (pickerInput) {
+          pickerInput.click();
+          pickerInput.focus();
+          return 'picker_input_clicked';
+        }
+
+        // 策略B: 文本类型 input（非 checkbox/hidden）
+        var inputs = wrapper.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"]):not([type="file"])');
+        if (inputs.length > 0) {
+          inputs[0].click();
+          inputs[0].focus();
+          return 'first_input_clicked';
+        }
+
+        // 策略C: 可点击的 div/span（如 ant-picker 纯 div 结构）
+        var clickables = wrapper.querySelectorAll('[class*="picker"], [class*="date"], [class*="time-input"], [class*="trigger"]');
+        if (clickables.length > 0) {
+          clickables[0].click();
+          return 'trigger_clicked';
+        }
+
+        return 'nothing_found';
+      })()
+    `).catch(() => 'error');
+    console.log('[小红书] 时间选择器交互:', filled);
+
+    // Step 4: 点击输入框打开日历弹出层
+    const inputBox = await this.i.evaluate(`
+      (function() {
+        var input = document.querySelector('.date-picker-container input.d-text');
+        if (!input || !input.offsetParent) return null;
+        var r = input.getBoundingClientRect();
+        return { x: r.x, y: r.y, w: r.width, h: r.height };
+      })()
+    `).catch(() => null);
+
+    if (inputBox && inputBox.w > 0) {
+      await this.i.humanClickAtCoordinates(inputBox.x + inputBox.w * 0.5, inputBox.y + inputBox.h * 0.5);
+      await sleep(1500);
+
+      // 扫描弹出层 — 全页面找高 z-index 可见元素
+      const scan = await this.i.evaluate(`
+        (function() {
+          var items = [];
+          var all = document.querySelectorAll('body *, body > *');
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            if (!el.offsetParent && el.style.position !== 'fixed') continue;
+            var r = el.getBoundingClientRect();
+            if (r.width < 200 || r.height < 200) continue;
+            var cs = window.getComputedStyle(el);
+            var z = parseInt(cs.zIndex) || 0;
+            if (z > 100 || cs.position === 'fixed' || cs.position === 'absolute') {
+              var cls = String(el.className || '').substring(0, 120);
+              // 只记录有意义的容器
+              if (cls.indexOf('picker') >= 0 || cls.indexOf('calendar') >= 0 || cls.indexOf('popup') >= 0 || cls.indexOf('dropdown') >= 0 || cls.indexOf('overlay') >= 0 || cls.indexOf('modal') >= 0 || cls.indexOf('dialog') >= 0 || cls.indexOf('portal') >= 0 || el.tagName === 'DIALOG' || r.width > 300) {
+                items.push({ cls: cls, w: Math.round(r.width), h: Math.round(r.height), tag: el.tagName, z: z, childCount: el.querySelectorAll('*').length });
+              }
+            }
+          }
+          return items;
+        })()
+      `).catch(() => []);
+      console.log('[小红书] 全页面浮层:', JSON.stringify(scan, null, 2));
+
+      // 精准操作时间选择器：d-timepicker-time 分组 → 第一组=小时，第二组=分钟
+      const targetHour = hour;
+      const targetMinute = minute;
+      console.log('[小红书] 目标时间: hour=' + targetHour + ' minute=' + targetMinute);
+      const clickResult = await this.i.evaluate(`
+        (function() {
+          var result = { hour: false, minute: false };
+          var th = ${JSON.stringify(targetHour)};
+          var tm = ${JSON.stringify(targetMinute)};
+
+          var timeItems = document.querySelectorAll('.d-timepicker-time');
+          if (timeItems.length === 0) return { error: 'no_d-timepicker-time' };
+
+          // 记录前6个选项值用于调试
+          result.sample = [];
+          for (var k = 0; k < Math.min(6, timeItems.length); k++) {
+            var t = timeItems[k].querySelector('span.d-text');
+            result.sample.push(t ? t.textContent.trim() : '?');
+          }
+
+          // 按父容器分组
+          var groups = [], lastParent = null;
+          for (var i = 0; i < timeItems.length; i++) {
+            if (timeItems[i].parentElement !== lastParent) {
+              groups.push([]);
+              lastParent = timeItems[i].parentElement;
+            }
+            groups[groups.length - 1].push(timeItems[i]);
+          }
+          result.groupCount = groups.length;
+          result.groupSizes = groups.map(function(g) { return g.length; });
+
+          // 第一组 = 小时
+          if (groups.length >= 1) {
+            for (var h = 0; h < groups[0].length; h++) {
+              var s = groups[0][h].querySelector('span.d-text');
+              if (s && s.textContent.trim() === th) { groups[0][h].click(); result.hour = true; break; }
+            }
+          }
+          // 第二组 = 分钟
+          if (groups.length >= 2) {
+            for (var m = 0; m < groups[1].length; m++) {
+              var s2 = groups[1][m].querySelector('span.d-text');
+              if (s2 && s2.textContent.trim() === tm) { groups[1][m].click(); result.minute = true; break; }
+            }
+          }
+          return result;
+        })()
+      `).catch(() => ({ error: true }));
+      console.log('[小红书] 时间点击:', JSON.stringify(clickResult));
+
+      await sleep(2500);
+
+      // 验证：检查 timepicker 选中状态
+      const verifyResult = await this.i.evaluate(`
+        (function() {
+          var items = document.querySelectorAll('.d-timepicker-time.d-clickable--selected span.d-text');
+          if (items.length >= 2) return items[0].textContent.trim() + ':' + items[1].textContent.trim();
+          var input = document.querySelector('.date-picker-container input.d-text');
+          return input ? input.value : 'verify_na';
+        })()
+      `).catch(() => 'error');
+      console.log('[小红书] 定时最终时间:', verifyResult);
+      if (!clickResult.hour || !clickResult.minute) {
+        this.broadcast('⚠️ 时间选择可能不完整: ' + verifyResult);
+      }
+    } else {
+      this.broadcast('⚠️ 未找到时间输入框');
+    }
+
+    // 如果触发了弹出式选择器，操作弹出层
+    if (filled === 'trigger_clicked') {
+      await sleep(1500);
+
+      // 先扫描弹出层结构
+      const popupInfo = await this.i.evaluate(`
+        (function() {
+          var targets = document.querySelectorAll('.ant-picker-dropdown, .ant-picker-panel, [class*="picker-dropdown"], [class*="date-picker"], [class*="time-panel"], [class*="calendar-popup"]');
+          var info = [];
+          for (var i = 0; i < targets.length; i++) {
+            if (targets[i].offsetParent) info.push({ cls: String(targets[i].className).substring(0, 100) });
+          }
+          return info;
+        })()
+      `).catch(() => []);
+      console.log('[小红书] 弹出层:', JSON.stringify(popupInfo));
+
+      // 操作时间选择器：找到时/分列，点选目标值
+      const targetHour = hour;    // "12"
+      const targetMinute = minute; // "46"
+      const timeSet = await this.i.evaluate(`
+        (function() {
+          var th = ${JSON.stringify(targetHour)};
+          var tm = ${JSON.stringify(targetMinute)};
+          var thNum = parseInt(th);
+          var tmNum = parseInt(tm);
+
+          // 策略A: antd TimePicker columns
+          var columns = document.querySelectorAll('.ant-picker-time-panel-column, [class*="time-panel-column"], [class*="time-column"]');
+          if (columns.length >= 2) {
+            // 第一列=小时，第二列=分钟
+            var hourCol = columns[0];
+            var minCol = columns[1];
+            var hourCells = hourCol.querySelectorAll('[class*="cell"], li, [role="option"]');
+            for (var i = 0; i < hourCells.length; i++) {
+              if (hourCells[i].textContent.trim() === th || parseInt(hourCells[i].textContent) === thNum) {
+                hourCells[i].click();
+                break;
+              }
+            }
+            setTimeout(function() {
+              var minCells = minCol.querySelectorAll('[class*="cell"], li, [role="option"]');
+              for (var j = 0; j < minCells.length; j++) {
+                if (minCells[j].textContent.trim() === tm || parseInt(minCells[j].textContent) === tmNum) {
+                  minCells[j].click();
+                  break;
+                }
+              }
+            }, 300);
+            return 'antd_columns';
+          }
+
+          // 策略B: 找 popup/dropdown 内的 input
+          var popups = document.querySelectorAll('[class*="popup"], [class*="dropdown"], [class*="overlay"], [class*="modal"]');
+          for (var p = 0; p < popups.length; p++) {
+            if (!popups[p].offsetParent) continue;
+            var inputs = popups[p].querySelectorAll('input:not([type="hidden"]):not([type="checkbox"]):not([type="file"])');
+            if (inputs.length >= 2) {
+              // 可能是 小时input + 分钟input
+              var hInput = inputs[0];
+              var mInput = inputs[1];
+              hInput.focus();
+              hInput.value = '';
+              var nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+              nativeSetter.call(hInput, th);
+              hInput.dispatchEvent(new Event('input', { bubbles: true }));
+              hInput.dispatchEvent(new Event('change', { bubbles: true }));
+              setTimeout(function() {
+                nativeSetter.call(mInput, tm);
+                mInput.dispatchEvent(new Event('input', { bubbles: true }));
+                mInput.dispatchEvent(new Event('change', { bubbles: true }));
+              }, 200);
+              return 'popup_inputs';
+            }
+            // 也可能只有一个时间输入
+            var timeInput = popups[p].querySelector('input[type="text"], input[type="time"]');
+            if (timeInput) {
+              timeInput.focus();
+              var ns2 = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+              ns2.call(timeInput, th + ':' + tm);
+              timeInput.dispatchEvent(new Event('input', { bubbles: true }));
+              timeInput.dispatchEvent(new Event('change', { bubbles: true }));
+              return 'single_time_input';
+            }
+          }
+
+          // 策略C: 在 post-time-wrapper 内找可直接编辑的文本
+          var wrapper = document.querySelector('.post-time-wrapper');
+          if (wrapper) {
+            var timeText = wrapper.querySelector('[class*="time-text"], [class*="time-display"], span[class*="time"]');
+            if (timeText && timeText.offsetParent) {
+              timeText.click();
+              return 'time_text_clicked';
+            }
+          }
+
+          return 'nothing_found';
+        })()
+      `).catch(() => 'error');
+      console.log('[小红书] 时间设置结果:', timeSet);
+
+      // 如果策略C点击了时间文字，用 CDP 填入
+      if (timeSet === 'time_text_clicked') {
+        await sleep(800);
+        await this.i.insertTextViaCDP(hour + ':' + minute);
+        await sleep(500);
+        await this.i.pressKey('Enter');
+      }
+
+      // 等待时间设置生效，点确定按钮
+      await sleep(1500);
+      const confirmed = await this.i.flexibleClick(['确定', '确认', 'OK', 'ok']);
+      console.log('[小红书] 确定按钮:', confirmed);
+    }
+
+    await sleep(800);
+    this.broadcast('✅ 定时发布设置完成: ' + scheduleTime);
   }
 
   async _setPoi(poi) {

@@ -25,7 +25,7 @@ const PLATFORM_KEY = {
   '微信视频号': 'wechat-channels'
 };
 
-const MANIFEST_URL = 'https://raw.githubusercontent.com/lilin893481171-git/svip-matrix/main/rpa-scripts/manifest.json';
+const MANIFEST_URL = 'https://raw.githubusercontent.com/lilin893481171-gif/svip-matrix/main/rpa-scripts/manifest.json';
 
 // ==========================================
 // ScriptManager 单例

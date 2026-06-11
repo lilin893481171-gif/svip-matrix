@@ -184,7 +184,9 @@ class TaskExecutor {
         wc,
         broadcast,
         sleep: (ms) => sleep(ms, wc),
-        abortSignal: signal,  // 🆕 脚本可检查此信号
+        abortSignal: signal,
+        scheduled: this.task.scheduled || false,
+        scheduleTime: this.task.scheduleTime || '',
 
         // 🆕 步骤验证失败 → 暂停等用户手动完成
         pauseForManualStep: (stepName, reason) => {
@@ -242,6 +244,7 @@ class TaskExecutor {
         return;
       }
 
+      console.log('[TaskExecutor] task.coverPath =', JSON.stringify(this.task.coverPath), 'videoPath =', JSON.stringify(this.task.videoPath), 'scheduled =', this.task.scheduled, 'scheduleTime =', this.task.scheduleTime, 'title =', JSON.stringify(this.task.title), 'desc =', JSON.stringify((this.task.desc || '').substring(0, 50)), 'tags =', JSON.stringify(this.task.tags));
       await ScriptManager.executePlatform(platform, api);
 
       if (!signal.aborted) {
@@ -485,10 +488,20 @@ export const registerRPAEngineIPC = () => {
   ScriptManager.init();
 
   ipcMain.handle('execute-auto-publish', async (event, taskData) => {
+    console.log('[execute-auto-publish] scheduled =', taskData.scheduled, 'scheduleTime =', taskData.scheduleTime);
     const taskId = taskData.taskId || `task_${Date.now()}`;
     const task = { ...taskData, taskId };
     taskManager.addTask(task);
     return { success: true, taskId, message: '发布任务已加入队列' };
+  });
+
+  // 重发：用原 taskData 直接重新入队，不回配置页
+  ipcMain.handle('retry-publish', async (event, originalTask) => {
+    const newHistoryId = `hist_${Date.now()}`;
+    const taskId = `task_${Date.now()}`;
+    const task = { ...originalTask, historyId: newHistoryId, taskId };
+    taskManager.addTask(task);
+    return { success: true, taskId, historyId: newHistoryId };
   });
 
   ipcMain.handle('get-task-stats', () => taskManager.getStats());
@@ -538,9 +551,15 @@ export const registerRPAEngineIPC = () => {
     return { success: true };
   });
 
-  // 🆕 强制关闭接管浏览器（放弃手动操作）
+  // 🆕 强制关闭接管浏览器（放弃手动操作 / 删除任务时清理）
   ipcMain.handle('force-close-manual-publish', async (event, historyId) => {
-    const executor = taskManager.manualTakeovers.get(historyId);
+    // 先查 manualTakeovers，再查 executors（覆盖所有可能的活跃浏览器）
+    let executor = taskManager.manualTakeovers.get(historyId);
+    let fromMap = 'manualTakeovers';
+    if (!executor) {
+      executor = taskManager.executors.get(historyId);
+      fromMap = 'executors';
+    }
     if (!executor) return { success: false, message: '未找到接管的任务' };
 
     const { taskId, videoId, platform } = executor.task;
@@ -549,6 +568,7 @@ export const registerRPAEngineIPC = () => {
     try { await executor.browserController.close(); } catch (e) {}
 
     taskManager.manualTakeovers.delete(historyId);
+    taskManager.executors.delete(historyId);
     taskManager.runningPlatforms.delete(platformKey);
 
     broadcastProgress(taskId, historyId, videoId, '已取消', {

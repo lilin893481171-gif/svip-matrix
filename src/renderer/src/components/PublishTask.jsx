@@ -263,8 +263,8 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       category: pConfig.category || '科技',
       isOriginal: pConfig.isOriginal ?? uConfig.original ?? false, 
       aigc: pConfig.aigc ?? uConfig.aigc ?? false,
-      scheduled: pConfig.scheduled ?? false,
-      scheduleTime: pConfig.scheduleTime ?? '',
+      scheduled: (pConfig.scheduleType && pConfig.scheduleType !== 'now') || pConfig.scheduled || false,
+      scheduleTime: pConfig.scheduleTime || uConfig.scheduleTime || '',
       syncToutiao: pConfig.syncToutiao ?? true,
       poi: pConfig.poi ?? '',
       productLink: pConfig.productLink ?? '',
@@ -272,7 +272,10 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
     };
 
     // 乐观 UI 更新
-    setPublishHistory(prev => [{ ...taskData, status: '排队中', time: new Date().toLocaleTimeString(), startTime: Date.now() }, ...prev]);
+    setPublishHistory(prev => [{
+      ...taskData, status: '排队中', time: new Date().toLocaleTimeString(), startTime: Date.now(),
+      _videoSnapshot: { id: activeVideo.id, path: activeVideo.videoPath || activeVideo.path, name: activeVideo.name, config: activeVideo.config },
+    }, ...prev]);
 
     try {
       const res = await electron.ipcRenderer.invoke('execute-auto-publish', taskData);
@@ -421,8 +424,8 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
           aigc: pConfig.aigc ?? uConfig.aigc ?? false,
           poi: pConfig.poi ?? '',
           productLink: pConfig.productLink ?? '',
-          scheduled: pConfig.scheduled ?? false,
-          scheduleTime: pConfig.scheduleTime ?? '',
+          scheduled: (pConfig.scheduleType && pConfig.scheduleType !== 'now') || pConfig.scheduled || false,
+          scheduleTime: pConfig.scheduleTime || uConfig.scheduleTime || '',
           syncToutiao: pConfig.syncToutiao ?? true,
           videoPath: vid.path,
           coverPath: uConfig.coverPath || ''

@@ -1,10 +1,10 @@
 {
   "scripts": {
     "小红书": {
-      "version": 12,
+      "version": 13,
       "file": "xiaohongshu.mjs",
-      "sha256": "f88d33cfbbf769d78969739ba93114979821803c76deaa1f6868d530ac5720a6",
-      "url": "https://raw.githubusercontent.com/lilin893481171-git/svip-matrix/main/rpa-scripts/xiaohongshu.mjs"
+      "sha256": "a4ec955d3b57a10efed7a0930da001778152dcf777df97687298dec591db6334",
+      "url": "https://raw.githubusercontent.com/lilin893481171-gif/svip-matrix/main/rpa-scripts/xiaohongshu.mjs"
     },
     "抖音": {
       "version": 1,
