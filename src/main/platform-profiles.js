@@ -19,6 +19,36 @@ export const PLATFORM_PROFILES = {
     wildcardApi: true,
     apis: [
       {
+        pattern: '/api/galaxy/user/info',
+        parse(json) {
+          const d = json?.data;
+          if (!d || !d.userName) return null;
+          return {
+            real_name: d.userName || '',
+            avatar: d.userAvatar || '',
+            user_id: d.redId || d.userId || '',
+            followers: 0,
+            total_views: 0
+          };
+        }
+      },
+      {
+        pattern: '/api/galaxy/',
+        parse(json) {
+          const d = json?.data;
+          if (!d) return null;
+          const name = d.userName || d.nickname || d.name || '';
+          if (!name) return null;
+          return {
+            real_name: name,
+            avatar: d.userAvatar || d.avatar || d.head_img_url || '',
+            user_id: d.redId || d.userId || d.red_id || d.red_num || '',
+            followers: d.fans_count || d.fans || 0,
+            total_views: d.faved_count || d.liked_count || 0
+          };
+        }
+      },
+      {
         pattern: '/api/sns/',
         parse(json) {
           const root = json?.data;
