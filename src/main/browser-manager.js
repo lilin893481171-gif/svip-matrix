@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { secureAtomicWriteFileSync, secureReadFileSync } from './utils/crypto-io.js';
 import { toPlaywright } from './utils/proxy.js';
+import { PLATFORM_PROFILES } from './platform-profiles.js';
 
 const activeBrowsers = new Map();
 
@@ -596,15 +597,7 @@ export async function saveAllStates() {
 // Cookie 导入与登录会话初始化引擎
 // ======================================
 export async function importCookieAndInitialize(accountId, cookieStr, platform, options = {}) {
-    const domainMap = {
-        '小红书': '.xiaohongshu.com',
-        '抖音': '.douyin.com',
-        'B站': '.bilibili.com',
-        '快手': '.kuaishou.com',
-        '百家号': '.baidu.com',
-        '微信视频号': '.qq.com'
-    };
-    const domain = domainMap[platform] || '.xiaohongshu.com';
+    const domain = PLATFORM_PROFILES[platform]?.cookieDomain || '.xiaohongshu.com';
     const targetUrl = `https://www${domain}`;
 
     // 1. 智能解析 CK (兼容 JSON 和 Header 字符串)

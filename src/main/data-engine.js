@@ -10,7 +10,8 @@ import path from 'path';
 import fs from 'fs';
 import { safeDeletePartition, teardownPartition } from './safe-delete.js';
 import { getDB } from './database.js';
-import * as cheerio from 'cheerio'; 
+import * as cheerio from 'cheerio';
+import { PLATFORM_PROFILES } from './platform-profiles.js';
 
 // ==========================================================
 // 1. 万能数据清洗引擎与解析器
@@ -197,16 +198,11 @@ function parseOfflineSnapshot(htmlContent, platform) {
 }
 
 // ==========================================================
-// 🌟 核心防风控：物理隔离平台入口
+// 🌟 核心防风控：物理隔离平台入口 — 由 platform-profiles.js 提供
 // ==========================================================
-const PLATFORM_URLS = {
-  '抖音': 'https://creator.douyin.com/creator-micro/home',
-  'B站': 'https://member.bilibili.com/platform/home',
-  '百家号': 'https://baijiahao.baidu.com/builder/rc/home',
-  '微信视频号': 'https://channels.weixin.qq.com/platform',
-  '快手': 'https://cp.kuaishou.com/profile',
-  '小红书': 'https://creator.xiaohongshu.com/new/home',
-};
+const PLATFORM_URLS = Object.fromEntries(
+  Object.entries(PLATFORM_PROFILES).map(([p, cfg]) => [p, cfg.creatorDashboardUrl])
+);
 
 // ==========================================================
 // 💥 战役一核心：自动化入网探针 (大道至简版本)
