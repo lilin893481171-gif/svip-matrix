@@ -3,7 +3,8 @@ import { FingerprintGenerator } from 'fingerprint-generator';
 import { FingerprintInjector } from 'fingerprint-injector';
 import fs from 'fs';
 import path from 'path';
-import crypto from 'crypto';
+import { secureAtomicWriteFileSync, secureReadFileSync } from './utils/crypto-io.js';
+import { toPlaywright } from './utils/proxy.js';
 
 const activeBrowsers = new Map();
 
@@ -20,50 +21,8 @@ const MAX_BACKUP_VERSIONS = 3;
 });
 
 // ======================================
-// 🔐 安全增强工具函数
+// 🔐 安全增强工具函数 — 由 utils/crypto-io.js 提供
 // ======================================
-
-function secureAtomicWriteFileSync(filePath, data, accountId) {
-    const tempPath = `${filePath}.tmp.${Date.now()}`;
-    try {
-        const key = crypto.createHash('sha256').update(String(accountId)).digest(); 
-        const iv = crypto.randomBytes(16);
-        const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-        
-        let encrypted = cipher.update(JSON.stringify(data), 'utf8', 'hex');
-        encrypted += cipher.final('hex');
-        
-        const payload = {
-            data: encrypted,
-            iv: iv.toString('hex'),
-            timestamp: Date.now()
-        };
-        
-        fs.writeFileSync(tempPath, JSON.stringify(payload), 'utf8');
-        fs.renameSync(tempPath, filePath);
-    } catch (error) {
-        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-        throw error;
-    }
-}
-
-function secureReadFileSync(filePath, accountId) {
-    try {
-        const content = fs.readFileSync(filePath, 'utf8');
-        const payload = JSON.parse(content);
-        
-        const key = crypto.createHash('sha256').update(String(accountId)).digest();
-        const iv = Buffer.from(payload.iv, 'hex');
-        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-        
-        let decrypted = decipher.update(payload.data, 'hex', 'utf8');
-        decrypted += decipher.final('utf8');
-        
-        return JSON.parse(decrypted);
-    } catch (error) {
-        throw error;
-    }
-}
 
 async function saveAccountState(accountId, context) {
     const stateFilePath = path.join(STATES_DIR, `${accountId}.json.enc`);
@@ -105,25 +64,8 @@ async function saveAccountState(accountId, context) {
 }
 
 /**
- * 🌐 智能代理转换引擎 (支持 ip:port:user:pass 格式)
+ * 🌐 智能代理转换引擎 — 由 utils/proxy.js 提供（toPlaywright）
  */
-function parseProxyString(proxyStr) {
-    if (!proxyStr) return undefined;
-    try {
-        const parts = proxyStr.trim().split(':');
-        if (parts.length === 4) {
-            // 格式: IP:Port:User:Pass
-            return { server: `http://${parts[0]}:${parts[1]}`, username: parts[2], password: parts[3] };
-        } else if (parts.length === 2) {
-            // 格式: IP:Port
-            return { server: `http://${parts[0]}:${parts[1]}` };
-        }
-        return { server: proxyStr }; // 兜底
-    } catch (e) {
-        console.warn('⚠️ 代理格式解析失败:', proxyStr);
-        return undefined;
-    }
-}
 
 function getOrCreateSessionProfile(accountId) {
     const fingerprintPath = path.join(FINGERPRINTS_DIR, `${accountId}.json.enc`);
@@ -383,7 +325,7 @@ export async function launchSandbox(accountId, options = {}) {
             permissions: ['geolocation'],
             geolocation: options.geolocation || { latitude: 30.2741, longitude: 120.1551 },
             // 代理配置：将代理 IP 绑定到当前会话上下文
-            proxy: options.proxy ? parseProxyString(options.proxy) : undefined
+            proxy: options.proxy ? toPlaywright(options.proxy) : undefined
         };
 
         const stateFilePath = path.join(STATES_DIR, `${accountId}.json.enc`);

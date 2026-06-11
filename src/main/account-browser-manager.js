@@ -11,11 +11,11 @@ import { BrowserView, BrowserWindow } from 'electron';
 import { FingerprintGenerator } from 'fingerprint-generator';
 import path from 'path';
 import fs from 'fs';
-import crypto from 'crypto';
 import { app } from 'electron';
 import { getDB } from './database.js';
 import { attachOnboardingSniffer, teardownOnboardingSniffer } from './account-onboarding.js';
 import { getTLSProxyRules, isTLSProxyRunning } from './tls-proxy-launcher.js';
+import { secureAtomicWriteFileSync, secureReadFileSync } from './utils/crypto-io.js';
 
 
 // ======================================
@@ -35,43 +35,8 @@ const sslRetryCount = new Map();  // 防 SSL 重试死循环
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ======================================
-// 1. 安全读写工具
+// 1. 安全读写工具 — 由 utils/crypto-io.js 提供
 // ======================================
-
-function secureAtomicWriteFileSync(filePath, data, accountId) {
-  const tempPath = `${filePath}.tmp.${Date.now()}`;
-  try {
-    const key = crypto.createHash('sha256').update(String(accountId)).digest();
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-    let encrypted = cipher.update(JSON.stringify(data), 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    fs.writeFileSync(tempPath, JSON.stringify({
-      data: encrypted,
-      iv: iv.toString('hex'),
-      timestamp: Date.now()
-    }), 'utf8');
-    fs.renameSync(tempPath, filePath);
-  } catch (error) {
-    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-    throw error;
-  }
-}
-
-function secureReadFileSync(filePath, accountId) {
-  try {
-    const content = fs.readFileSync(filePath, 'utf8');
-    const payload = JSON.parse(content);
-    const key = crypto.createHash('sha256').update(String(accountId)).digest();
-    const iv = Buffer.from(payload.iv, 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-    let decrypted = decipher.update(payload.data, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return JSON.parse(decrypted);
-  } catch (error) {
-    throw error;
-  }
-}
 
 // ======================================
 // 2. 指纹生成 (fingerprint-generator 纯JS)
@@ -767,24 +732,8 @@ export function buildSessionEnvironmentScript(fp, accountId) {
 }
 
 // ======================================
-// 4. 代理解析工具
+// 4. 代理解析工具 — 由 utils/proxy.js 提供（toSocks5）
 // ======================================
-
-function parseProxyString(proxyStr) {
-  if (!proxyStr) return undefined;
-  try {
-    const parts = proxyStr.trim().split(':');
-    const protocol = 'socks5://'; 
-    if (parts.length === 4) {
-      return `${protocol}${parts[2]}:${parts[3]}@${parts[0]}:${parts[1]}`;
-    } else if (parts.length === 2) {
-      return `${protocol}${parts[0]}:${parts[1]}`;
-    }
-    return proxyStr;
-  } catch (e) {
-    return undefined;
-  }
-}
 
 // ======================================
 // 5. 核心：原生嵌入式会话容器启动
