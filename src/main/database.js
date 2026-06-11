@@ -76,6 +76,7 @@ export function initDatabase() {
     safeAddColumn(db, 'accounts', 'user_id', 'TEXT', "''");
     safeAddColumn(db, 'accounts', 'avatar', 'TEXT', "''");
     safeAddColumn(db, 'accounts', 'trend_data', 'TEXT', "'{}'");
+    safeAddColumn(db, 'accounts', 'base64_avatar', 'TEXT', "''");
 
     // === 2. daily_stats ===
     db.exec(`
@@ -250,7 +251,7 @@ export function registerDatabaseIPC() {
   ipcMain.handle('db-get-accounts', async () => {
     try {
       const stmt = db.prepare(`
-        SELECT id, alias, platform, group_name, custom_url, status, real_name, username, user_id, followers, following, posts, total_views, avatar, trend_data 
+        SELECT id, alias, platform, group_name, custom_url, status, real_name, username, user_id, followers, following, posts, total_views, avatar, base64_avatar, trend_data
         FROM accounts 
         ORDER BY created_at DESC
       `);

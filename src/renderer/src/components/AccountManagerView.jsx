@@ -584,13 +584,12 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
                          }}>
                       <div className="flex items-center pr-2">
                         <div className="relative flex-shrink-0">
-                          {acc.avatar ? (
-                            <img src={acc.avatar} referrerPolicy="no-referrer" className="w-9 h-9 rounded-lg object-cover border border-slate-100 shadow-sm" />
-                          ) : (
-                            <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-white font-black text-xs shadow-sm ${platforms.find(p => p.name === acc.platform)?.color || 'bg-slate-400'}`}>
-                              {acc.platform ? acc.platform[0] : 'N'}
-                            </div>
-                          )}
+                          {(acc.base64_avatar || acc.avatar) ? (
+                            <img src={acc.base64_avatar || acc.avatar} referrerPolicy="no-referrer" className="w-9 h-9 rounded-lg object-cover border border-slate-100 shadow-sm" onError={(e) => { e.target.style.display='none'; e.target.nextElementSibling?.style?.removeProperty('display'); }} />
+                          ) : null}
+                          <div style={(acc.base64_avatar || acc.avatar) ? {display:'none'} : undefined} className={`w-9 h-9 rounded-lg flex items-center justify-center text-white font-black text-xs shadow-sm ${platforms.find(p => p.name === acc.platform)?.color || 'bg-slate-400'}`}>
+                            {acc.platform ? acc.platform[0] : 'N'}
+                          </div>
                           <div className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 ${statusInfo.color} rounded-full border-2 border-white flex items-center justify-center shadow-sm z-10`}>
                             {statusInfo.ping && <span className="absolute inline-flex h-full w-full rounded-full bg-fuchsia-400 opacity-75 animate-ping"></span>}
                             {statusInfo.icon}

@@ -6,6 +6,7 @@
 import { getDB } from './database.js';
 import { BrowserWindow } from 'electron';
 import { guardScrapedData } from './platform-profiles.js';
+import { cacheAvatar } from './avatar-cache.js';
 
 /**
  * 统一写入账户 profile 数据
@@ -65,7 +66,10 @@ export function upsertAccountProfile(accountId, data, opts = {}) {
         .run(data.real_name, accountId);
     }
 
-    // 5. 通知 renderer
+    // 5. 头像本地缓存（fire-and-forget）
+    if (data.avatar) cacheAvatar(accountId, data.avatar).catch(() => {});
+
+    // 6. 通知 renderer
     if (notify) {
       try {
         const wins = BrowserWindow.getAllWindows();
