@@ -190,6 +190,23 @@ function checkPhase(session, url) {
       if (session.phase !== 'done') tryDomFallback(session);
     }, 6000);
     session.timers.push(t);
+
+    // 主动导航：3 秒后跳转创作者后台（CDP 拦截器会自动捕获 API 响应）
+    const profileUrl = session.config.creatorDashboardUrl;
+    if (profileUrl && !url.includes(new URL(profileUrl).hostname)) {
+      const navTimer = setTimeout(() => {
+        if (session.phase !== 'done' && !session.userNavigated && !session.collected.real_name) {
+          console.log(`[Onboarding] 主动导航至创作者后台: ${profileUrl}`);
+          try { session.webContents.loadURL(profileUrl); } catch (e) { /* ignore */ }
+        }
+      }, 3000);
+      session.timers.push(navTimer);
+
+      // 用户 3 秒内手动导航则取消主动导航
+      const onUserNav = () => { session.userNavigated = true; };
+      session.webContents.once('did-navigate', onUserNav);
+      session.timers.push({ _clear: () => { try { session.webContents.removeListener('did-navigate', onUserNav); } catch (e) {} } });
+    }
   }
 
   // 如果已登录但切换到登录页 → 掉线
@@ -348,7 +365,10 @@ export function teardownOnboardingSniffer(accountId) {
   }
 
   // 清理定时器
-  session.timers.forEach(clearTimeout);
+  session.timers.forEach(t => {
+    if (t && t._clear) t._clear();
+    else clearTimeout(t);
+  });
 
   activeSniffers.delete(key);
 }
