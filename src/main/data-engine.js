@@ -12,6 +12,7 @@ import { safeDeletePartition, teardownPartition } from './safe-delete.js';
 import { getDB } from './database.js';
 import * as cheerio from 'cheerio';
 import { PLATFORM_PROFILES } from './platform-profiles.js';
+import { upsertAccountProfile } from './account-store.js';
 
 // ==========================================================
 // 1. 万能数据清洗引擎与解析器
@@ -367,12 +368,15 @@ export async function autoBindAccount(platform, proxyStr = '') {
 
         if (finalData.realName || finalData.userId) {
             console.log(`[探针系统] 🎯 精准执行完毕！最终入库数据：${finalData.realName} (粉丝: ${finalData.followers})`);
-            let finalAvatar = finalData.avatar;
-            if (finalAvatar && finalAvatar.startsWith('//')) finalAvatar = 'https:' + finalAvatar;
 
-            db.prepare(`UPDATE accounts SET alias = ?, real_name = ?, followers = ?, total_views = ?, avatar = ?, user_id = ?, status = ? WHERE id = ?`)
-              .run(finalData.realName || `${platform}新号`, finalData.realName, finalData.followers, finalData.views, finalAvatar, finalData.userId, '在线', accountId);
-            
+            upsertAccountProfile(accountId, {
+              real_name: finalData.realName,
+              avatar: finalData.avatar,
+              user_id: finalData.userId,
+              followers: finalData.followers,
+              total_views: finalData.views,
+            }, { setStatus: true, fixAlias: true });
+
             extractionSuccess = true;
             break;
         } else {
@@ -412,8 +416,12 @@ async function runSingleSync(accountId, platform) {
       const bilibiliRadar = new StableBilibiliRadar();
       const radarData = await bilibiliRadar.getStableAccountData(acc.user_id);
       if (radarData && radarData.success) {
-        db.prepare('UPDATE accounts SET followers = ?, total_views = ?, status = ?, real_name = ?, avatar = ?, user_id = ? WHERE id = ?')
-          .run(radarData.data.followers, radarData.data.totalViews, '在线', radarData.data.realName || acc.real_name, radarData.data.avatar || acc.avatar, acc.user_id, accountId);
+        upsertAccountProfile(accountId, {
+          real_name: radarData.data.realName,
+          avatar: radarData.data.avatar,
+          followers: radarData.data.followers,
+          total_views: radarData.data.totalViews,
+        }, { setStatus: true });
         return { success: true };
       }
     }

@@ -6,7 +6,8 @@
  */
 import { getDB } from './database.js';
 import { BrowserWindow } from 'electron';
-import { PLATFORM_PROFILES as PLATFORM, guardScrapedData, extractProfileFromJSON } from './platform-profiles.js';
+import { PLATFORM_PROFILES as PLATFORM, extractProfileFromJSON } from './platform-profiles.js';
+import { upsertAccountProfile } from './account-store.js';
 
 // ── 活跃嗅探会话 ──
 const activeSniffers = new Map();
@@ -285,59 +286,20 @@ function mergeData(session, data, source = 'api') {
     session.collected._apiCaptured = true;
   }
 
-  // URL 归一化：协议相对 → https，去除微信头像 URL 参数
-  if (session.collected.avatar) {
-    let av = session.collected.avatar;
-    if (av.startsWith('//')) av = 'https:' + av;
-    if (av.startsWith('http://')) av = av.replace('http://', 'https://');
-    session.collected.avatar = av;
-  }
-
+  // URL 归一化 + guard + COALESCE SQL + 别名修正 + notify → 统一走 account-store
   const c = session.collected;
-  const hasMinimum = c.real_name || c.user_id;
+  if (!c.real_name && !c.user_id) return;
 
-  if (!hasMinimum) return;
+  const result = upsertAccountProfile(session.accountId, c, {
+    platform: session.platform,
+    notify: true,
+    setStatus: true,
+  });
 
-  try {
-    guardScrapedData(c, session.platform);
-  } catch (e) {
-    console.warn(e.message);
-    return;  // 阻断入库
-  }
-
-  try {
-    const db = getDB();
-    db.prepare(`
-      UPDATE accounts
-      SET real_name = COALESCE(NULLIF(?,''), real_name),
-          avatar    = COALESCE(NULLIF(?,''), avatar),
-          user_id   = COALESCE(NULLIF(?,''), user_id),
-          followers = CASE WHEN ? > 0 THEN ? ELSE followers END,
-          total_views = CASE WHEN ? > 0 THEN ? ELSE total_views END,
-          status    = '在线'
-      WHERE id = ?
-    `).run(
-      c.real_name || '', c.avatar || '', c.user_id || '',
-      c.followers || 0, c.followers || 0,
-      c.total_views || 0, c.total_views || 0,
-      session.accountId
-    );
-
+  if (result.success) {
     console.log(`[Onboarding] 入库完成: ${session.platform} #${session.accountId} → ${c.real_name || c.user_id}`);
-
-    // 标记完成
     session.phase = 'done';
-
-    // 加入别名修正
-    if (c.real_name) {
-      db.prepare("UPDATE accounts SET alias = ? WHERE id = ? AND alias LIKE '待绑定_%'")
-        .run(c.real_name, session.accountId);
-    }
-
-    notifyRenderer(session.accountId, { ...c, _status: 'complete' });
     teardownOnboardingSniffer(session.accountId);
-  } catch (e) {
-    console.error(`[Onboarding] 入库失败:`, e.message);
   }
 }
 
@@ -346,31 +308,13 @@ function finalize(session) {
   if (session.phase === 'done') return;
   session.phase = 'done';
 
-  // 至少标记在线
-  updateStatus(session.accountId, '在线');
-
   if (session.collected.real_name || session.collected.user_id) {
-    try { guardScrapedData(session.collected, session.platform); } catch (e) {
-      console.warn(e.message);
-      teardownOnboardingSniffer(session.accountId);
-      return;
-    }
-    try {
-      const db = getDB();
-      db.prepare(`
-        UPDATE accounts
-        SET real_name = COALESCE(NULLIF(?,''), real_name),
-            avatar    = COALESCE(NULLIF(?,''), avatar),
-            user_id   = COALESCE(NULLIF(?,''), user_id),
-            followers = CASE WHEN ? > 0 THEN ? ELSE followers END,
-            status    = '在线'
-        WHERE id = ?
-      `).run(
-        session.collected.real_name || '', session.collected.avatar || '', session.collected.user_id || '',
-        session.collected.followers || 0, session.collected.followers || 0,
-        session.accountId
-      );
-    } catch (e) { /* ignore */ }
+    upsertAccountProfile(session.accountId, session.collected, {
+      platform: session.platform,
+      setStatus: true,
+    });
+  } else {
+    updateStatus(session.accountId, '在线');
   }
 
   notifyRenderer(session.accountId, { ...session.collected, _status: 'finalized' });
