@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { 
-  PlayCircle, Users, RefreshCw, Trash2, 
+import {
+  PlayCircle, Users, RefreshCw, Trash2,
   BarChart2, Clock, ArrowUpRight, Sparkles, Flame, Crown,
   Lock, ShieldAlert, Heart, Radar
 } from 'lucide-react';
+import { useToast } from './ToastContext';
 
 // ==============================================
 // 🎨 平台专属品牌色与 Logo 映射字典
@@ -112,6 +113,7 @@ export default function Dashboard({ onGoToAccountManager }) {
 
   const [syncingAll, setSyncingAll] = useState(false);
   const [syncingId, setSyncingId] = useState(null);
+  const toast = useToast();
   
   // 💥 核心：全局 30天 播放总量实时计算
   const global30DaysViews = useMemo(() => {
@@ -163,31 +165,42 @@ export default function Dashboard({ onGoToAccountManager }) {
     try {
       const res = await window.electron.ipcRenderer.invoke('sync-account-stats-all');
       if (res.success) {
-        await loadDashboardData(); 
-        triggerCooldown(); 
+        await loadDashboardData();
+        triggerCooldown();
+        toast.success('全网数据同步完成');
       } else {
-        alert('部分节点同步受阻：' + res.message);
+        toast.error('部分节点同步受阻：' + res.message);
       }
     } catch (err) {
       console.error(err);
-      alert('系统异常：' + err.message);
+      toast.error('系统异常：' + err.message);
     } finally {
       setSyncingAll(false);
     }
   };
 
   const handleBasicSync = async (accountId, platform) => {
-    if (syncingId === accountId || isCoolingDown) return;
+    if (syncingId === accountId) return;
+    // Per-account cooldown (24h)
+    const cooldownKey = `sync_cooldown_${accountId}`;
+    const lastSync = localStorage.getItem(cooldownKey);
+    if (lastSync && Date.now() - parseInt(lastSync) < 24 * 60 * 60 * 1000) {
+      toast.warning(`${platform} 今日已同步，请24小时后再试`);
+      return;
+    }
     setSyncingId(accountId);
     try {
       const res = await window.electron.ipcRenderer.invoke('sync-account-stats', { accountId, platform });
       if (res.success) {
-        await loadDashboardData(); 
+        await loadDashboardData();
+        localStorage.setItem(cooldownKey, Date.now().toString());
+        toast.success(`${platform} 同步完成`);
       } else {
-        alert(`[${platform}] 基础同步失败：` + res.message);
+        toast.error(`[${platform}] 基础同步失败：` + res.message);
       }
     } catch (err) {
-      alert('系统异常：' + err.message);
+      console.error(err);
+      toast.error(`[${platform}] 同步异常：` + err.message);
     } finally {
       setSyncingId(null);
     }
@@ -199,12 +212,14 @@ export default function Dashboard({ onGoToAccountManager }) {
     try {
       const res = await window.electron.ipcRenderer.invoke('sync-30days-data', { accountId, platform });
       if (res.success) {
-        await loadDashboardData(); 
+        await loadDashboardData();
+        toast.success(`${platform} 深度提取完成`);
       } else {
-        alert(`[${platform}] 深度提取失败：` + res.message);
+        toast.error(`[${platform}] 深度提取失败：` + res.message);
       }
     } catch (err) {
-      alert('系统异常：' + err.message);
+      console.error(err);
+      toast.error('系统异常：' + err.message);
     } finally {
       setSyncingId(null);
     }
@@ -217,7 +232,7 @@ export default function Dashboard({ onGoToAccountManager }) {
       if (res.success) {
         await loadDashboardData(); 
       } else {
-        alert('删除失败：' + res.message);
+        toast.error('删除失败：' + res.message);
       }
     } catch (err) {
       console.error(err);
