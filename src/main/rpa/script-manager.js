@@ -1,11 +1,10 @@
 /**
  * @file rpa/script-manager.js
- * RPA 脚本管理器 — 下载/缓存/校验/加载/三级回退
+ * RPA 脚本管理器 — 下载/缓存/校验/加载/二级回退
  *
- * 三级回退:
+ * 二级回退:
  *   1. userData/rpa-scripts/  (GitHub 下载，最新)
  *   2. resources/rpa-scripts/  (ASAR 内置，出厂版本)
- *   3. adapters/ 旧类          (迁移保底)
  */
 import { app } from 'electron';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
@@ -117,7 +116,7 @@ export class ScriptManager {
     await mod.execute(api);
   }
 
-  // ---- 脚本加载（三级回退） ----
+  // ---- 脚本加载（二级回退） ----
 
   /** @returns {Promise<{ execute: Function, meta: object }>} */
   static async #loadScript(platform) {
@@ -148,35 +147,13 @@ export class ScriptManager {
         console.log(`[ScriptManager] ${platform} → 内置脚本 v${mod.meta?.version || '?'}`);
         return mod;
       } catch (e) {
-        console.warn(`[ScriptManager] 内置脚本失败 (${platform}), 回退旧适配器...`, e.message);
+        console.warn(`[ScriptManager] 内置脚本失败 (${platform})`, e.message);
+        throw new Error(`无法加载 ${platform} 脚本: ${e.message}`);
       }
     }
 
-    // Tier 3: 旧适配器类（迁移保底）
-    console.warn(`[ScriptManager] ${platform} → 旧适配器（保底）`);
-    return this.#loadLegacyAdapter(platform);
-  }
-
-  /** 动态加载旧适配器类并包装为脚本接口 */
-  static async #loadLegacyAdapter(platform) {
-    const { KuaishouAdapter, BaijiahaoAdapter, BilibiliAdapter, DouyinAdapter, WechatChannelsAdapter, XiaohongshuAdapter } = await import('./adapters/index.js');
-
-    const AdapterMap = {
-      '抖音': DouyinAdapter,
-      '微信视频号': WechatChannelsAdapter, 'B站': BilibiliAdapter,
-      '快手': KuaishouAdapter, '百家号': BaijiahaoAdapter,
-      '小红书': XiaohongshuAdapter
-    };
-
-    const Adapter = AdapterMap[platform];
-    return {
-      meta: { platform, version: 0, legacy: true },
-      execute: async (api) => {
-        const { interactions, task, wc, broadcast } = api;
-        const adapter = new Adapter(interactions, task, wc, broadcast);
-        await adapter.execute();
-      }
-    };
+    // 不再使用旧适配器保底，直接抛出错误
+    throw new Error(`未找到 ${platform} 脚本文件，请检查 resources/rpa-scripts/ 目录`);
   }
 
   // ---- 更新检查 ----

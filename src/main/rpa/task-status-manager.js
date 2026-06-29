@@ -2,6 +2,7 @@
  * @file task-status-manager.js
  * 任务状态管理器 - 实时状态反馈和用户引导
  */
+import { checkXHSSessionValidity, refreshXHSSession } from '../session-store.js';
 
 export class TaskStatusManager {
   constructor(taskId, platform) {
@@ -12,6 +13,7 @@ export class TaskStatusManager {
     this.callbacks = [];
     this.startTime = Date.now();
     this.lastUpdate = Date.now();
+    this.sessionCheckCount = 0; // 会话检查计数器
   }
 
   /**
@@ -61,6 +63,26 @@ export class TaskStatusManager {
   async checkLoginStatus(interactions) {
     try {
       this.broadcast('检查登录状态...', 'checking_login');
+
+      // 对于小红书平台，先检查会话有效性
+      if (this.platform === '小红书') {
+        const session = interactions.wc.session;
+        const accountId = this.taskId.split('_')[0]; // 假设taskId格式为accountId_timestamp
+
+        const sessionCheck = await checkXHSSessionValidity(session, accountId);
+        if (!sessionCheck.isValid) {
+          this.broadcast(`⚠️ 会话失效: ${sessionCheck.reason}`, 'session_expired');
+
+          // 尝试刷新会话
+          this.broadcast('🔄 尝试刷新会话...', 'refreshing_session');
+          const refreshed = await refreshXHSSession(interactions.wc, accountId);
+          if (refreshed) {
+            this.broadcast('✅ 会话刷新成功', 'session_refreshed');
+          } else {
+            this.broadcast('❌ 会话刷新失败，需要重新登录', 'need_login');
+          }
+        }
+      }
 
       // 检查页面是否显示登录界面
       const isLoginPage = await interactions.evaluate(`
