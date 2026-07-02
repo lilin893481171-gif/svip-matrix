@@ -3,27 +3,7 @@
  * BrowserView 会话引擎 — 纯 Electron 原生 API，零 CDP 依赖
  */
 import { BrowserWindow, BrowserView, app } from 'electron';
-import { existsSync, mkdirSync, copyFileSync, readdirSync, statSync } from 'fs';
-import { join } from 'path';
-import { teardownSessionAndClean } from '../safe-delete.js';
-import { getTLSProxyRules, isTLSProxyRunning, isCAInstalled } from '../tls-proxy-launcher.js';
-
-// 递归复制分区目录 — Session Storage / Local Storage 是目录层级，
-// copyFileSync 遇到目录直接抛错，必须递归处理
-function copyRecursive(src, dst) {
-  if (!existsSync(src)) return;
-  const st = statSync(src);
-  if (st.isDirectory()) {
-    mkdirSync(dst, { recursive: true });
-    const entries = readdirSync(src);
-    for (const entry of entries) {
-      copyRecursive(join(src, entry), join(dst, entry));
-    }
-  } else {
-    mkdirSync(join(dst, '..'), { recursive: true });
-    copyFileSync(src, dst);
-  }
-}
+import { getTLSProxyRules, isTLSProxyRunning } from '../tls-proxy-launcher.js';
 
 import { NativeInteractions } from '../native-interactions.js';
 import { getOrCreateSessionProfile, buildSessionEnvironmentScript } from '../account-browser-manager.js';
@@ -43,44 +23,31 @@ const sleep = (ms, wc = null) => {
 export class BrowserController {
   constructor(accountId) {
     this.accountId = accountId;
-    // 🔑 独立分区：加 _rpa 后缀，避免与账户浏览器共享 Cookie 存储
-    // 共享分区会导致两个 BrowserView 竞争 SQLite WAL，损坏 Cookie → 登录态丢失
-    this.partitionKey = `chrome_data_${accountId}_rpa`;
+    // 🔑 共享分区：与账户浏览器使用相同 partition，登录态天然继承
+    // 启动前由 rpa-engine 关闭登录浏览器，避免 SQLite WAL 竞争
+    this.partitionKey = `chrome_data_${accountId}`;
     this.view = null;
     this.mainWindow = null;
     this.webContents = null;
     this.nativeInteractions = null;
   }
 
-  async launch() {
-    const windows = BrowserWindow.getAllWindows();
-    if (windows.length === 0) throw new Error("主窗口未找到");
-    this.mainWindow = windows[0];
+  async launch(options = {}) { // ✨ ADDED options parameter
+    const { isTestRun = false } = options; // ✨ ADDED isTestRun flag
 
-    // 🔑 从账户浏览器分区复制 Cookie 到 RPA 独立分区
-    // 这样 RPA 有完整登录态，同时不会污染账户浏览器
-    const userDataPath = app.getPath('userData');
-    const srcPartition = join(userDataPath, 'Partitions', `chrome_data_${this.accountId}`);
-    const dstPartition = join(userDataPath, 'Partitions', this.partitionKey);
-
-    if (existsSync(srcPartition)) {
-      try {
-        mkdirSync(dstPartition, { recursive: true });
-        // 全量复制会话数据（排除大体积缓存目录）
-        const SKIP = new Set(['Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'blob_storage', 'WebStorage']);
-        const entries = readdirSync(srcPartition);
-        for (const name of entries) {
-          if (SKIP.has(name)) continue;
-          const src = join(srcPartition, name);
-          try { copyRecursive(src, join(dstPartition, name)); } catch (e) {
-            console.warn(`[BrowserController] 复制 ${name} 失败:`, e.message);
-          }
-        }
-        console.log(`[BrowserController] 会话分区已完整复制到 RPA 独立分区 (跳过缓存)`);
-      } catch (e) {
-        console.warn('[BrowserController] Cookie 复制失败:', e.message);
-      }
+    let hostWindow = BrowserWindow.getAllWindows()[0];
+    // ✨ MODIFIED: In test run, we don't need a main window.
+    if (!hostWindow && !isTestRun) {
+      throw new Error('主窗口未找到');
     }
+
+    // ✨ ADDED: If it's a test run, create a temporary host window.
+    if (isTestRun && !hostWindow) {
+      console.log('[BrowserController] 启动测试模式，创建临时宿主窗口...');
+      hostWindow = new BrowserWindow({ show: false, width: 1280, height: 800 });
+      this.isTempWindow = true; // Mark that we created this window
+    }
+    this.mainWindow = hostWindow; // ✨ Use the determined host window
 
     this.view = new BrowserView({
       webPreferences: {
@@ -93,8 +60,8 @@ export class BrowserController {
     });
 
     this.mainWindow.addBrowserView(this.view);
-    // 视口与 JS 层伪造的屏幕分辨率 (1920x1080) 对齐，消除物理/逻辑分辨率指纹差异
-    this.view.setBounds({ x: -10000, y: -10000, width: 1920, height: 1080 });
+    // 初始放在屏幕外但不离太远 (0,0,1,1)，避免 Chromium 因视口移出屏幕挂起页面
+    this.view.setBounds({ x: 0, y: 0, width: 1, height: 1 });
 
     this.webContents = this.view.webContents;
 
@@ -234,21 +201,37 @@ export class BrowserController {
   attachToWindow(bounds) {
     if (this.mainWindow && this.view) {
       try { this.mainWindow.setTopBrowserView(this.view); } catch (e) {}
+      this._lastBounds = { ...bounds }
       this.view.setBounds(bounds);
     }
   }
 
   detachFromWindow() {
     if (this.mainWindow && this.view) {
-      this.view.setBounds({ x: -10000, y: -10000, width: 1920, height: 1080 });
+      // 缩小到 1x1 放在角落，保持视口内活跃，避免 Chromium 挂起页面导致 visibilitychange 触发
+      this.view.setBounds({ x: 0, y: 0, width: 1, height: 1 });
     }
   }
 
-  async close() {
+  resizeForDebugPanel(margin) {
+    if (!this.mainWindow || !this.view || !this._lastBounds) return
     try {
-      const dstPartition = join(app.getPath('userData'), 'Partitions', this.partitionKey);
-      if (existsSync(dstPartition)) {
-        await teardownSessionAndClean(this.mainWindow, this.view, dstPartition, this.partitionKey);
+      const base = this._lastBounds
+      const adjusted = margin > 0
+        ? { ...base, width: Math.max(200, base.width - margin) }
+        : { ...base }
+      this.view.setBounds(adjusted)
+    } catch (e) { /* ignore */ }
+  }
+
+  async close() {
+    // 共享分区模式：只清理 BrowserView，保留分区数据（登录态持久化）
+    try {
+      if (this.mainWindow && !this.mainWindow.isDestroyed() && this.view) {
+        this.mainWindow.removeBrowserView(this.view);
+      }
+      if (this.view?.webContents && !this.view.webContents.isDestroyed()) {
+        this.view.webContents.close();
       }
     } catch (e) {
       console.warn('[BrowserController] 拆除失败:', e.message);
@@ -257,6 +240,33 @@ export class BrowserController {
       this.webContents = null;
       this.nativeInteractions = null;
     }
+  }
+
+  /** v3: 强制销毁 — 不做任何等待，不优雅关闭 */
+  async terminate() {
+    try {
+      if (this.view?.webContents && !this.view.webContents.isDestroyed()) {
+        this.view.webContents.close();
+      }
+    } catch (_) {}
+    try {
+      if (this.mainWindow && !this.mainWindow.isDestroyed() && this.view) {
+        this.mainWindow.removeBrowserView(this.view);
+      }
+    } catch (e) {
+      console.warn('[BrowserController] terminate removeBrowserView:', e.message);
+    }
+    this.view = null;
+    this.webContents = null;
+    this.nativeInteractions = null;
+  }
+
+  /**
+   * @deprecated 旧的两参数签名 — 已废弃，拦截器注入链路已移除 (v17 排毒清理)
+   */
+  async injectInterceptorLegacy(wc, taskData) {
+    console.warn('[BrowserController] injectInterceptorLegacy 已废弃 — 拦截器注入链路已移除');
+    return { ok: false, error: '已废弃' };
   }
 
   async verifyFingerprint() {
@@ -331,5 +341,14 @@ export class BrowserController {
       : '❌ 验证失败 — 会话环境在导航后丢失，CDP 注入可能未生效';
 
     return results;
+  }
+
+  /**
+   * @deprecated v17 排毒清理 — 拦截器注入链路已完全移除
+   * RPA 发布现在使用纯 CDP 直注 + 原生 XHR 协议发包，不再劫持 fetch/XMLHttpRequest。
+   */
+  async injectInterceptor(taskData = {}) {
+    console.warn('[BrowserController] injectInterceptor 已废弃 — 拦截器注入链路已移除 (v17)');
+    return false;
   }
 }

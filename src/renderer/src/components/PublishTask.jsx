@@ -7,13 +7,8 @@ import {
 } from 'lucide-react';
 import MediaLibraryPanel from './MediaLibraryPanel';
 import AIFillPanel from './AIFillPanel';
-import XiaohongshuPanel from './XiaohongshuPanel';
-import KuaishouPanel from './KuaishouPanel';
-import BilibiliPanel from './BilibiliPanel';
+import UniversalPlatformPanel from './UniversalPlatformPanel';
 import CommonConfigPanel from './CommonConfigPanel';
-import WechatChannelsPanel from './WechatChannelsPanel';
-import BaijiahaoPanel from './BaijiahaoPanel';
-import DouyinPanel from './DouyinPanel';
 import { SYSTEM_MEDIA_FOLDER } from '../config/matrixConfig';
 import { useToast } from './ToastContext';
 import getElectron from '../utils/electron';
@@ -21,6 +16,7 @@ import { PLATFORM_COLORS, getBrand } from '../utils/platformHelpers';
 import { validatePlatform, getValidationErrorMessages } from '../utils/validation';
 import { TaskStatusMonitor } from './TaskStatusMonitor';
 import { toMatrixMediaUrl } from '../utils/safePath';
+import PublishEngineStatus from './PublishEngineStatus';
 
 const PlatformHeader = ({ platform }) => {
   const colors = {
@@ -84,7 +80,7 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
   const rpaDockRef = useRef(null);
   const [rpaViewActive, setRpaViewActive] = useState(false);
   const [rpaActiveTaskId, setRpaActiveTaskId] = useState(null);
-  const activeRunningTask = syncTasks.find(t => t.status === '开始执行' || (t.status && t.status.includes('中') && t.status !== '排队中'));
+  const activeRunningTask = syncTasks.length > 0 ? syncTasks[0] : undefined;
 
   // 自动吸附 BrowserView 到内嵌面板
   useEffect(() => {
@@ -100,7 +96,7 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       window.addEventListener('resize', updateBounds);
       return () => {
         window.removeEventListener('resize', updateBounds);
-        electron.ipcRenderer.send('detach-robot-view');
+        // 任务还在跑 → 不分离 BrowserView，只从窗口移除 resize 监听
       };
     }
   }, [rpaViewActive, activeRunningTask?.historyId]);
@@ -112,6 +108,28 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       setRpaActiveTaskId(activeRunningTask.historyId);
     }
   }, [activeRunningTask?.historyId]);
+
+  // 页面恢复时检查是否有运行中的任务并恢复 RPA 视图状态
+  useEffect(() => {
+    // 组件挂载时检查是否有运行中的任务
+    const activeRunning = syncTasks.length > 0 ? syncTasks[0] : undefined;
+    if (activeRunning) {
+      setRpaViewActive(true);
+      setRpaActiveTaskId(activeRunning.historyId);
+      // 通知主进程重新连接 BrowserView
+      electron.ipcRenderer.send('reconnect-task-monitor', activeRunning.historyId);
+      // 延迟 attach，确保 DOM 已渲染
+      setTimeout(() => {
+        if (rpaDockRef.current) {
+          const rect = rpaDockRef.current.getBoundingClientRect();
+          electron.ipcRenderer.send('attach-robot-view', {
+            taskId: activeRunning.historyId,
+            bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
+          });
+        }
+      }, 500);
+    }
+  }, []); // 只在组件挂载时执行一次
 
   // ─── 步骤系统（状态提升至 App.jsx，跨视图存活）───
   const currentStep = publishStep;
@@ -261,7 +279,7 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       desc: pConfig.desc ?? uConfig.desc ?? '',
       tags: pConfig.tags ?? uConfig.tags ?? '',
       category: pConfig.category || '科技',
-      isOriginal: pConfig.isOriginal ?? uConfig.original ?? false, 
+      isOriginal: pConfig.isOriginal ?? uConfig.original ?? false,
       aigc: pConfig.aigc ?? uConfig.aigc ?? false,
       scheduled: (pConfig.scheduleType && pConfig.scheduleType !== 'now') || pConfig.scheduled || false,
       scheduleTime: pConfig.scheduleTime || uConfig.scheduleTime || '',
@@ -269,16 +287,36 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       poi: pConfig.poi ?? '',
       productLink: pConfig.productLink ?? '',
       visibility: pConfig.visibility || 'public',
+      // B站特有字段 — v2 对齐 Publisher fillTemplate 7大变量
+      ...(platformName === 'B站' ? {
+        tid: pConfig.tid ?? uConfig.tid ?? 188,
+        copyright: pConfig.copyright ?? uConfig.copyright ?? 1,
+        dynamic: pConfig.dynamic ?? uConfig.dynamic ?? '',
+        dtime: (() => {
+          if (pConfig.scheduleType && pConfig.scheduleType !== 'now' && pConfig.scheduleTime) {
+            return Math.floor(new Date(pConfig.scheduleTime).getTime() / 1000);
+          }
+          return 0;
+        })(),
+      } : {}),
     };
 
     // 乐观 UI 更新
     setPublishHistory(prev => [{
-      ...taskData, status: '排队中', time: new Date().toLocaleTimeString(), startTime: Date.now(),
+      ...taskData, status: '排队中', time: `${new Date().getFullYear()}年${new Date().getMonth() + 1}月${new Date().getDate()}日 ${new Date().getHours()}时${new Date().getMinutes()}分`, startTime: Date.now(),
       _videoSnapshot: { id: activeVideo.id, path: activeVideo.videoPath || activeVideo.path, name: activeVideo.name, config: activeVideo.config },
     }, ...prev]);
 
     try {
-      const res = await electron.ipcRenderer.invoke('execute-auto-publish', taskData);
+      const res = await electron.ipcRenderer.invoke('platform:publish', {
+        platform,
+        accountId,
+        title: taskData.title,
+        description: taskData.desc,
+        videoPath: activeVideo.videoPath || activeVideo.path,
+        taskId: taskData.taskId,
+        accountAlias: taskData.accountAlias
+      });
       if (res.success) {
          // 🚀 核心优化：一开始，立刻带你去发布队列看板！
          setActiveTab('history');
@@ -408,27 +446,44 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
         const [accountId, platform, accountAlias] = accStr.split('|');
         const historyId = `hist_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
         
-        setPublishHistory(prev => [{ historyId, videoId: vid.id, videoName: vid.name, title: pConfig.title ?? uConfig.title ?? '', coverPath: uConfig.coverPath || '', platform, accountAlias, status: '排队中', time: new Date().toLocaleTimeString(), startTime: Date.now(), taskId: '', _videoSnapshot: { id: vid.id, path: vid.path, name: vid.name, config: vid.config } }, ...prev]);
+        setPublishHistory(prev => [{ historyId, videoId: vid.id, videoName: vid.name, title: pConfig.title ?? uConfig.title ?? '', coverPath: uConfig.coverPath || '', platform, accountAlias, status: '排队中', time: `${new Date().getFullYear()}年${new Date().getMonth() + 1}月${new Date().getDate()}日 ${new Date().getHours()}时${new Date().getMinutes()}分`, startTime: Date.now(), taskId: '', _videoSnapshot: { id: vid.id, path: vid.path, name: vid.name, config: vid.config } }, ...prev]);
 
         const pConfig = vid.config.platforms[platform] || {};
         const uConfig = vid.config.universal;
 
-        const result = await electron.ipcRenderer.invoke('execute-auto-publish', {
-          historyId, videoId: vid.id, platform, accountId, accountAlias,
-          title: pConfig.title ?? uConfig.title, 
-          desc: pConfig.desc ?? uConfig.desc,
-          tags: pConfig.tags ?? uConfig.tags, 
-          category: pConfig.category ?? uConfig.category,
-          firstComment: pConfig.firstComment ?? uConfig.firstComment,
-          isOriginal: pConfig.isOriginal ?? uConfig.original ?? false,
-          aigc: pConfig.aigc ?? uConfig.aigc ?? false,
-          poi: pConfig.poi ?? '',
-          productLink: pConfig.productLink ?? '',
+        const result = await electron.ipcRenderer.invoke('platform:publish', {
+          platform,
+          accountId,
+          title: pConfig.title ?? uConfig.title,
+          description: pConfig.desc ?? uConfig.desc,
+          videoPath: vid.path,
+          taskId: result.taskId,
+          accountAlias,
           scheduled: (pConfig.scheduleType && pConfig.scheduleType !== 'now') || pConfig.scheduled || false,
           scheduleTime: pConfig.scheduleTime || uConfig.scheduleTime || '',
-          syncToutiao: pConfig.syncToutiao ?? true,
-          videoPath: vid.path,
-          coverPath: uConfig.coverPath || ''
+          tags: pConfig.tags ?? uConfig.tags,
+          isOriginal: pConfig.isOriginal ?? uConfig.original ?? false,
+          aigc: pConfig.aigc ?? uConfig.aigc ?? false,
+          firstComment: pConfig.firstComment ?? uConfig.firstComment,
+          coverPath: uConfig.coverPath || '',
+          // B站特有字段
+          ...(platform === 'B站' ? {
+            type: pConfig.type || '自制',
+            noReprint: pConfig.noReprint ?? true,
+            allowRecreate: pConfig.allowRecreate ?? false,
+            enableCharge: pConfig.enableCharge ?? true,
+            commercial: pConfig.commercial ?? false,
+            declaration: pConfig.declaration || '',
+            supplementaryDeclaration: pConfig.supplementaryDeclaration || '无',
+            dolbyAudio: pConfig.dolbyAudio ?? false,
+            hifiAudio: pConfig.hifiAudio ?? false,
+            watermark: pConfig.watermark ?? false,
+            closeDanmu: pConfig.closeDanmu ?? false,
+            closeComment: pConfig.closeComment ?? false,
+            selectedComment: pConfig.selectedComment ?? false,
+            dynamic: pConfig.dynamic || '',
+            pinComment: pConfig.pinComment ?? false,
+          } : {})
         });
 
         if (result.success) {
@@ -481,91 +536,19 @@ export default function PublishTask({ accounts, videoList, setVideoList, activeV
       );
     }
 
-// ==================== 🔥 1. 抖音（独立 DouyinPanel 组件） ====================
-    if (activeEditorTab === '抖音') {
-      const dyConfig = { ...uConfig, ...pConfig };
-      return (
-        <div className="bg-[#f6f6f6] min-h-full animate-in fade-in duration-300 py-6 pb-32 font-sans px-4 sm:px-8 flex justify-center">
-          <DouyinPanel
-            config={dyConfig}
-            onChange={(field, value) => updateConfig('抖音', field, value)}
-            onPublish={() => handlePublish('抖音')}
-            onSaveDraft={() => updateConfig('抖音', '_draftSaved', true)}
-            isPublishing={publishingPlatform === '抖音'}
-          />
-        </div>
-      );
-    }
+// ==================== 🔥 统一平台编辑器 ====================
+    const SUPPORTED_PLATFORMS = ['抖音', '小红书', 'B站', '快手', '微信视频号', '百家号'];
 
-    // ==================== 🔥 2. 小红书（原生编辑器） ====================
-    if (activeEditorTab === '小红书') {
-      const xhsConfig = { ...uConfig, ...pConfig };
+    if (SUPPORTED_PLATFORMS.includes(activeEditorTab)) {
+      const platformConfig = { ...uConfig, ...pConfig };
       return (
-        <XiaohongshuPanel
-          config={xhsConfig}
-          onChange={(field, value) => updateConfig('小红书', field, value)}
-          onPublish={() => handlePublish('小红书')}
-          onSaveDraft={() => updateConfig('小红书', '_draftSaved', true)}
-          isPublishing={publishingPlatform === '小红书'}
-        />
-      );
-    }
-
-// ==================== 🔥 3. 快手 ====================
-    if (activeEditorTab === '快手') {
-      const ksConfig = { ...uConfig, ...pConfig };
-      return (
-        <KuaishouPanel
-          config={ksConfig}
-          onChange={(field, value) => updateConfig('快手', field, value)}
-          onPublish={() => handlePublish('快手')}
-          onSaveDraft={() => updateConfig('快手', '_draftSaved', true)}
-          isPublishing={publishingPlatform === '快手'}
-        />
-      );
-    }
-
-// ==================== 🔥 4. B站 ====================
-    if (activeEditorTab === 'B站') {
-      const biliConfig = { ...uConfig, ...pConfig };
-      return (
-        <BilibiliPanel
-          config={biliConfig}
-          onChange={(field, value) => updateConfig('B站', field, value)}
-          onPublish={() => handlePublish('B站')}
-          onSaveDraft={() => updateConfig('B站', '_draftSaved', true)}
-          isPublishing={publishingPlatform === 'B站'}
-        />
-      );
-    }
-
-// ==================== 🔥 5. 微信视频号（全功能专属面板） ====================
-if (activeEditorTab === '微信视频号') {
-  const wxConfig = { ...uConfig, ...pConfig };
-  return (
-    <div className="bg-[#f5f6f7] min-h-full animate-in fade-in duration-300 py-6 flex justify-center">
-      <WechatChannelsPanel
-        config={wxConfig}
-            onChange={(field, value) => { updateConfig('微信视频号', field, value); if (field === 'coverPath') { updateConfig('universal', 'coverUrl', value); updateConfig('universal', 'coverPath', value); } }}
-        onPublish={() => handlePublish('微信视频号')}
-        onSaveDraft={() => updateConfig('微信视频号', '_draftSaved', true)}
-        activeVideo={activeVideo}
-        isPublishing={publishingPlatform === '微信视频号'}
-      />
-    </div>
-  );
-}
-
-    // ==================== 🔥 6. 百家号 ====================
-    if (activeEditorTab === '百家号') {
-      const bjhConfig = { ...uConfig, ...pConfig };
-      return (
-        <BaijiahaoPanel
-          config={bjhConfig}
-          onChange={(field, value) => updateConfig('百家号', field, value)}
-          onPublish={() => handlePublish('百家号')}
-          onSaveDraft={() => updateConfig('百家号', '_draftSaved', true)}
-          isPublishing={publishingPlatform === '百家号'}
+        <UniversalPlatformPanel
+          platform={activeEditorTab}
+          config={platformConfig}
+          onChange={(field, value) => updateConfig(activeEditorTab, field, value)}
+          onPublish={() => handlePublish(activeEditorTab)}
+          onSaveDraft={() => updateConfig(activeEditorTab, '_draftSaved', true)}
+          isPublishing={publishingPlatform === activeEditorTab}
         />
       );
     }
@@ -899,7 +882,18 @@ return (
               <div className="flex flex-col items-center">
                 <div className="w-[140px] h-[240px] bg-black rounded-xl overflow-hidden border-[4px] border-slate-700 relative shadow-2xl">
                   {activeVideo.url ? (
-                    <video ref={videoRef} src={activeVideo.url} controls className="w-full h-full object-contain bg-black" />
+                    <video
+                      ref={videoRef}
+                      src={activeVideo.url}
+                      controls
+                      className="w-full h-full object-contain bg-black"
+                      onError={(e) => {
+                        console.error('[Video Error] URL:', activeVideo.url, e);
+                      }}
+                      onCanPlay={() => {
+                        console.log('[Video Ready] URL:', activeVideo.url);
+                      }}
+                    />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-slate-500 text-[10px]">视频源不可用</div>
                   )}

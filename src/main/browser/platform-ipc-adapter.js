@@ -5,12 +5,11 @@
 
 import { ipcMain } from 'electron';
 import { EngineSelector } from './engine-selector.js';
-import { XiaohongshuAdapter } from '../rpa/adapters/xiaohongshu-adapter.js';
 import { checkUserLoggedInSystemChrome } from './user-data-manager.js';
 import { exportAndSerializeCookies } from './cookie-manager.js';
 import { deserializeCookies } from './cookie-manager.js';
-import { injectCookiesBeforeNavigation } from './cookie-injector.js';
-import { prePublishLoginCheck } from './login-status-checker.js';
+// import { injectCookiesBeforeNavigation } from './cookie-injector.js'; // 已移除 Puppeteer 依赖
+// import { prePublishLoginCheck } from './login-status-checker.js'; // 已移除 Puppeteer 依赖
 
 // 全局引擎选择器实例
 const engineSelector = new EngineSelector();
@@ -37,7 +36,9 @@ async function getAdapterInstance(platform, task) {
   console.log(`[PlatformIPC] 检查系统 Chrome 登录状态: ${platform} = ${useSystemChrome}`);
 
   // 选择引擎
+  console.log(`[PlatformIPC] 开始选择引擎，useSystemChrome: ${useSystemChrome}`);
   const engine = await engineSelector.selectEngine(useSystemChrome);
+  console.log(`[PlatformIPC] 引擎选择完成，引擎类型: ${engine.type}`);
 
   // 创建适配器实例
   let adapter;

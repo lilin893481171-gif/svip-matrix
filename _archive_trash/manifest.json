@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "小红书": {
+      "version": 20,
+      "file": "xiaohongshu.mjs",
+      "description": "全新v20版本，修复了旧适配器问题"
+    }
+  }
+}

@@ -3,11 +3,10 @@
  * Chrome 启动器 — 用 child_process 启动 Chrome 并管理生命周期
  */
 
-import { spawn, ChildProcess } from 'child_process';
+import { spawn } from 'child_process';
 import path from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { app } from 'electron';
-import { randomBytes } from 'crypto';
 
 export class ChromeLauncher {
   constructor() {
@@ -154,6 +153,9 @@ export class ChromeLauncher {
     if (this.isRunning) {
       throw new Error('Chrome 已经在运行');
     }
+
+    // 在启动新进程前，先清理可能的残留进程
+    await this.cleanupStaleProcesses();
 
     this.debugPort = this.generateDebugPort();
     this.userDataDir = this.getUserDataDir(useSystemChrome);
@@ -331,6 +333,35 @@ export class ChromeLauncher {
       console.error('[ChromeLauncher] 强制关闭失败:', error);
       this.isRunning = false;
       this.chromeProcess = null;
+    }
+  }
+
+  /**
+   * 清理残留的 Chrome 进程
+   */
+  async cleanupStaleProcesses() {
+    console.log('[ChromeLauncher] 清理残留的 Chrome 进程...');
+
+    try {
+      if (process.platform === 'win32') {
+        // Windows: 使用 wmic 查找并终止可能的残留进程
+        const { execSync } = await import('child_process');
+        execSync(
+          `wmic process where "name='chrome.exe' and (CommandLine like '%chrome-user-data%' or CommandLine like '%system-chrome-user-data%')" call terminate`,
+          { stdio: 'ignore' }
+        );
+      } else if (process.platform === 'darwin') {
+        // macOS: 使用 pkill 查找并终止可能的残留进程
+        const { execSync } = await import('child_process');
+        execSync(
+          `pkill -f 'chrome-user-data|system-chrome-user-data' 2>/dev/null`,
+          { stdio: 'ignore' }
+        );
+      }
+
+      console.log('[ChromeLauncher] 残留进程清理完成');
+    } catch (error) {
+      console.warn('[ChromeLauncher] 清理残留进程时出现警告:', error.message);
     }
   }
 

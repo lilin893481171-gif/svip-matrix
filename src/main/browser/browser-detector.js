@@ -3,7 +3,7 @@
  * 浏览器检测模块 — 扫描本机 Chrome/Edge 安装路径
  */
 
-import { execSync, exec } from 'child_process';
+import { execSync } from 'child_process';
 import path from 'path';
 import { existsSync } from 'fs';
 
@@ -129,14 +129,30 @@ export class BrowserDetector {
    */
   getBrowserVersion(browserPath) {
     try {
-      const result = execSync(
-        `"${browserPath}" --version`,
-        { encoding: 'utf8', timeout: 5000 }
-      );
+      // 首先尝试使用 --version 参数
+      let result;
+      try {
+        result = execSync(
+          `"${browserPath}" --version`,
+          { encoding: 'utf8', timeout: 5000 }
+        );
+      } catch (e) {
+        // 如果 --version 失败，尝试使用 PowerShell 获取版本
+        if (this.os === 'win32') {
+          result = execSync(
+            `powershell -Command "(Get-Item '${browserPath}').VersionInfo.ProductVersion"`,
+            { encoding: 'utf8', timeout: 5000 }
+          );
+        } else {
+          throw e; // 非 Windows 系统直接抛出异常
+        }
+      }
+
       const versionMatch = result.match(/(\d+\.\d+\.\d+\.\d+)/);
-      return versionMatch ? versionMatch[1] : null;
+      return versionMatch ? versionMatch[1] : result.trim();
     } catch (e) {
-      return null;
+      console.warn(`[BrowserDetector] 获取浏览器版本失败: ${e.message}`);
+      return 'unknown';
     }
   }
 
@@ -198,6 +214,9 @@ export class BrowserDetector {
    * 获取检测报告
    */
   getDetectionReport() {
+    // 确保先进行检测
+    this.detectAllBrowsers();
+
     return {
       os: this.os,
       detectedBrowsers: this.detectedBrowsers,

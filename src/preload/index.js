@@ -1,17 +1,16 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-// ============================================================
+// ═══════════════════════════════════════════════════════
 // IPC 通道安全白名单
-// 所有渲染进程能访问的 invoke / send / on 通道必须在此注册
-// 新增功能时务必同步更新此列表，否则通道将被静默拦截
-// ============================================================
+// ═══════════════════════════════════════════════════════
 const ALLOWED_INVOKE = new Set([
   // AI / LLM
   'llm-request',
   // RPA 发布
-  'execute-auto-publish', 'save-temp-cover',
+  'execute-auto-publish', 'retry-publish', 'save-temp-cover',
   'get-task-stats', 'get-system-info', 'clear-task-queue',
-  'cancel-publish-task', 'complete-manual-publish', 'continue-after-manual-step',
+  'cancel-publish-task', 'takeover-publish-task', 'emergency-stop-all',
+  'complete-manual-publish', 'continue-after-manual-step',
   'force-close-manual-publish', 'pause-task-queue', 'resume-task-queue', 'cancel-task',
   'verify-rpa-armor',
   // 账号 BrowserView（嵌入式浏览器）
@@ -38,9 +37,15 @@ const ALLOWED_INVOKE = new Set([
   'email-folders-list',
   'email-mark-read', 'email-mark-unread', 'email-toggle-star', 'email-delete',
   'email-send', 'email-select-attachments',
+  // R2 云盘上传
+  'r2-upload-file',
   'email-idle-start', 'email-idle-stop',
   // 邮件悬浮浏览器
   'email-browser-open', 'email-browser-close', 'email-browser-get-state',
+  // 🔥 无头发射引擎 (Publisher)
+  'publisher-execute',
+  // 调试面板 → 主进程: BrowserView 视口管理
+  'debug-panel-visibility',
 ]);
 
 const ALLOWED_SEND = new Set([
@@ -51,6 +56,8 @@ const ALLOWED_SEND = new Set([
   'account-browser-reload', 'account-browser-stop',
   // RPA 浏览器机械臂
   'attach-robot-view', 'detach-robot-view',
+  // RPA 任务重连
+  'reconnect-task-monitor',
 ]);
 
 const ALLOWED_RECEIVE = new Set([
@@ -60,10 +67,14 @@ const ALLOWED_RECEIVE = new Set([
   'account-browser-url-change', 'account-browser-title-change',
   'account-browser-url-changed', 'account-onboarding-data',
   'account-session-opened', 'account-session-closed',
+  // 面板快捷键 (主进程 globalShortcut → IPC)
+  'hotkey-toggle-protocol-aggregator', 'hotkey-toggle-debug-panel',
   // 邮件系统
   'email-new-message', 'email-sync-progress', 'email-connection-status',
   // 邮件悬浮浏览器
   'email-browser-url-changed', 'email-browser-closed',
+  // IPC 注册完成事件
+  'ipc-registered',
 ]);
 
 const electronAPI = {
@@ -81,6 +92,10 @@ const electronAPI = {
       const subscription = (event, ...args) => listener(...args)
       ipcRenderer.on(channel, subscription)
       return () => ipcRenderer.removeListener(channel, subscription)
+    },
+    off: (channel, listener) => {
+      if (!ALLOWED_RECEIVE.has(channel)) return;
+      ipcRenderer.removeListener(channel, (event, ...args) => listener(...args));
     },
     removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel)
   }

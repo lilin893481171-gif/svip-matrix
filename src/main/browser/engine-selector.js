@@ -5,13 +5,13 @@
 
 import { BrowserDetector } from './browser-detector.js';
 import { ChromeLauncher } from './chrome-launcher.js';
-import { PuppeteerConnector } from './puppeteer-connector.js';
+// import { PuppeteerConnector } from './puppeteer-connector.js'; // 已移除 Puppeteer 依赖
 
 export class EngineSelector {
   constructor() {
     this.browserDetector = new BrowserDetector();
     this.chromeLauncher = new ChromeLauncher();
-    this.puppeteerConnector = new PuppeteerConnector();
+    // this.puppeteerConnector = new PuppeteerConnector(); // 已移除 Puppeteer 依赖
     this.selectedEngine = null;
     this.engineType = null;
   }
@@ -31,7 +31,7 @@ export class EngineSelector {
 
     if (userPreference === 'embedded') {
       console.log('[EngineSelector] 用户指定使用内嵌浏览器');
-      return this.selectEmbeddedEngine();
+      throw new Error('发布功能不支持内嵌浏览器，请安装 Chrome 或 Edge 浏览器');
     }
 
     // 优先选择 Chrome，其次 Edge
@@ -42,9 +42,9 @@ export class EngineSelector {
       return await this.selectRealBrowserEngine(bestBrowser, useSystemChrome);
     }
 
-    // 未检测到浏览器或用户未指定，降级为内嵌浏览器
-    console.log('[EngineSelector] 未检测到浏览器，降级为内嵌浏览器');
-    return this.selectEmbeddedEngine();
+    // 未检测到浏览器，直接抛出错误
+    console.log('[EngineSelector] 未检测到浏览器，发布功能需要 Chrome 或 Edge 浏览器');
+    throw new Error('未检测到 Chrome 或 Edge 浏览器，请安装 Chrome 或 Edge 浏览器以进行内容发布');
   }
 
   /**
@@ -58,50 +58,23 @@ export class EngineSelector {
       const launchResult = await this.chromeLauncher.launch(browser.path, useSystemChrome);
       console.log('[EngineSelector] 浏览器启动成功:', launchResult);
 
-      // 连接 Puppeteer
-      const connectResult = await this.puppeteerConnector.connect(launchResult.debugPort);
-      console.log('[EngineSelector] Puppeteer 连接成功:', connectResult);
-
       this.selectedEngine = {
-        type: 'puppeteer',
-        browser: connectResult.browser,
+        type: 'real',
         chromeLauncher: this.chromeLauncher,
-        puppeteerConnector: this.puppeteerConnector,
         debugPort: launchResult.debugPort,
         userDataDir: launchResult.userDataDir,
         useSystemChrome: launchResult.useSystemChrome,
         browserInfo: browser
       };
 
-      this.engineType = 'puppeteer';
+      this.engineType = 'real';
 
       console.log('[EngineSelector] 真实浏览器引擎已就绪');
       return this.selectedEngine;
     } catch (error) {
       console.error('[EngineSelector] 真实浏览器引擎启动失败:', error);
-
-      // 启动失败，降级为内嵌浏览器
-      console.log('[EngineSelector] 降级为内嵌浏览器');
-      return this.selectEmbeddedEngine();
+      throw new Error(`真实浏览器启动失败: ${error.message}，请确保 Chrome 或 Edge 浏览器已正确安装`);
     }
-  }
-
-  /**
-   * 选择内嵌浏览器引擎
-   */
-  selectEmbeddedEngine() {
-    this.selectedEngine = {
-      type: 'embedded',
-      // 内嵌浏览器的具体实现在这里占位
-      browser: null,
-      launcher: null,
-      connector: null
-    };
-
-    this.engineType = 'embedded';
-
-    console.log('[EngineSelector] 内嵌浏览器引擎已就绪');
-    return this.selectedEngine;
   }
 
   /**
@@ -135,8 +108,10 @@ export class EngineSelector {
       return false;
     }
 
-    if (this.engineType === 'puppeteer') {
-      return this.puppeteerConnector.isConnected;
+    if (this.engineType === 'real') {
+      // 检查 Chrome 是否仍在运行
+      const status = this.chromeLauncher.getStatus();
+      return status.isRunning;
     }
 
     if (this.engineType === 'embedded') {
@@ -148,17 +123,21 @@ export class EngineSelector {
   }
 
   /**
-   * 重连引擎
+   * 重连引擎 (对于真实浏览器，这通常意味着检查进程是否仍在运行)
    */
   async reconnect() {
-    if (this.engineType === 'puppeteer') {
+    if (this.engineType === 'real') {
       try {
         const status = this.chromeLauncher.getStatus();
-        if (status.debugPort) {
-          return await this.puppeteerConnector.reconnect(status.debugPort);
+        if (status.isRunning) {
+          console.log('[EngineSelector] 浏览器仍在运行，无需重连');
+          return { success: true };
+        } else {
+          console.log('[EngineSelector] 浏览器已停止，需要重新启动');
+          throw new Error('浏览器已停止运行');
         }
       } catch (error) {
-        console.error('[EngineSelector] 引擎重连失败:', error);
+        console.error('[EngineSelector] 引擎状态检查失败:', error);
         throw error;
       }
     }
@@ -167,12 +146,11 @@ export class EngineSelector {
   }
 
   /**
-   * 优雅断开引擎连接
+   * 优雅断开引擎连接 (对于真实浏览器，这通常意味着不关闭浏览器进程)
    */
   async disconnect() {
-    if (this.engineType === 'puppeteer') {
+    if (this.engineType === 'real') {
       try {
-        await this.puppeteerConnector.disconnect();
         await this.chromeLauncher.disconnect();
       } catch (error) {
         console.error('[EngineSelector] 引擎断开连接失败:', error);
@@ -185,12 +163,11 @@ export class EngineSelector {
   }
 
   /**
-   * 强制关闭引擎
+   * 强制关闭引擎 (对于真实浏览器，这会强制关闭浏览器进程)
    */
   async forceClose() {
-    if (this.engineType === 'puppeteer') {
+    if (this.engineType === 'real') {
       try {
-        await this.puppeteerConnector.forceDisconnect();
         await this.chromeLauncher.forceClose();
       } catch (error) {
         console.error('[EngineSelector] 引擎强制关闭失败:', error);
@@ -205,13 +182,12 @@ export class EngineSelector {
    * 获取引擎状态
    */
   getStatus() {
-    if (this.engineType === 'puppeteer') {
+    if (this.engineType === 'real') {
       return {
         type: this.engineType,
         isReady: this.isEngineReady(),
         browserInfo: this.selectedEngine?.browserInfo,
-        chromeStatus: this.chromeLauncher.getStatus(),
-        puppeteerStatus: this.puppeteerConnector.getStatus()
+        chromeStatus: this.chromeLauncher.getStatus()
       };
     }
 

@@ -184,16 +184,9 @@ export async function refreshXHSSession(wc, accountId) {
 /**
  * 启动小红书会话保持器
  * @param {string} accountId - 账户 ID
+ * @deprecated 小红书专用模块已移除，需要迁移至 PlatformRegistry
  */
 export async function startXHSSessionKeeper(accountId) {
-  try {
-    // 动态导入会话保持器
-    const { createSessionKeeper } = await import('./xhs-session-keeper.mjs');
-    const cleanup = await createSessionKeeper(accountId);
-    console.log(`[SessionStore] 小红书会话保持器已启动: ${accountId}`);
-    return cleanup;
-  } catch (e) {
-    console.error(`[SessionStore] 启动会话保持器失败: ${accountId}`, e.message);
-    return null;
-  }
+  console.warn(`[SessionStore] startXHSSessionKeeper 已废弃，需要迁移至新架构`);
+  return null;
 }

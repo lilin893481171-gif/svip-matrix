@@ -7,7 +7,7 @@ export default function MentionInput({
   position = '末尾',
   onPositionChange,
   label = '@好友',
-  searchPlaceholder = '请输入关键词搜索好友',
+  searchPlaceholder = '请输入关键词搜索',
   hintText = '@将追加到简介',
 }) {
   return (

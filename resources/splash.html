@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>正在初始化...</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+            -webkit-app-region: drag; /* 允许拖动窗口 */
+            user-select: none;
+        }
+        .container {
+            max-width: 400px;
+            -webkit-app-region: no-drag; /* 容器内不允许拖动 */
+        }
+        h1 {
+            font-size: 24px;
+        }
+        p {
+            color: #aaa;
+        }
+        #status {
+            font-size: 14px;
+            margin-top: 20px;
+            color: #999;
+            height: 20px;
+        }
+        #progress-bar-container {
+            width: 100%;
+            background-color: #333;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-top: 15px;
+            border: 1px solid #444;
+        }
+        #progress-bar {
+            width: 0%;
+            height: 12px;
+            background: linear-gradient(90deg, #4CAF50, #81C784);
+            transition: width 0.2s ease-in-out;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 你可以在这里放置你的 Logo -->
+        <!-- <img src="logo.png" alt="Logo" width="80"> -->
+        <h1>正在初始化运行环境...</h1>
+        <p>首次启动需要适配您的系统，请稍候。</p>
+        <div id="progress-bar-container">
+            <div id="progress-bar"></div>
+        </div>
+        <div id="status">正在准备...</div>
+    </div>
+    <script>
+        // Node.js 和 Electron API 在 preload 脚本中更安全，
+        // 但对于这个简单的、本地的、无外部内容的 splash screen，直接使用是可接受的。
+        const { ipcRenderer } = require('electron');
+        const statusEl = document.getElementById('status');
+        const progressBarEl = document.getElementById('progress-bar');
+
+        ipcRenderer.on('engine-status-update', (event, { status, progress, message }) => {
+            console.log('Received status update:', { status, progress, message });
+
+            let displayMessage = message || status;
+            // 避免显示 null 或 undefined
+            statusEl.textContent = displayMessage || '正在处理...';
+
+            if (progress !== null && progress !== undefined) {
+                progressBarEl.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+            }
+        });
+    </script>
+</body>
+</html>

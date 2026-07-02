@@ -1,0 +1,11 @@
+{
+  "taskId": "test_task_001",
+  "historyId": "test_hist_001",
+  "platform": "小红书",
+  "accountId": "test_account_001",
+  "accountAlias": "测试账号",
+  "title": "测试视频标题",
+  "desc": "这是一个测试视频的描述",
+  "videoPath": "D:/test_video.mp4",
+  "usePlaywright": true
+}

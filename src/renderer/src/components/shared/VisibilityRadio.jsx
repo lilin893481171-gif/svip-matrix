@@ -4,7 +4,11 @@ export default function VisibilityRadio({
   value,
   onChange,
   accentColor,
-  options,
+  options = [
+    { value: 'public', label: '公开' },
+    { value: 'private', label: '私密' },
+    { value: 'friends', label: '好友可见' },
+  ],
   name = 'visibility',
 }) {
   return (

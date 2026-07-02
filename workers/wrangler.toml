@@ -1,0 +1,14 @@
+name = "r2-presign-gateway"
+main = "r2-presign-worker.js"
+compatibility_date = "2024-01-01"
+
+# ── 环境变量（敏感信息用 wrangler secret 上传）──
+[vars]
+R2_ACCOUNT_ID = "59de0a54b7d4e08453845738582bc501"
+R2_BUCKET = "matrix-ai-hub-storage"
+R2_PUBLIC_DOMAIN = "https://assetsyumatrix.nikolaboy.com"
+ALLOWED_ORIGINS = "*"
+
+# 敏感变量用命令行设置：
+# npx wrangler secret put R2_ACCESS_KEY
+# npx wrangler secret put R2_SECRET_KEY

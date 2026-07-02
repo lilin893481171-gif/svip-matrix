@@ -33,21 +33,9 @@ const Utils = {
   },
   extractFollowers(text, platform) {
     if (!text) return 0;
-    if (platform === '百家号') {
-      let m = text.match(/(?:总粉丝量|粉丝数)\s*[:：]?\s*([\d,.]+[万wW亿kK]?)/);
-      if (m) return this.parseCount(m[1]);
-    }
     const cleanText = text.replace(/\s+/g, '');
-    let m = null;
-    if (platform === '小红书' || platform === '快手') {
-      m = cleanText.match(/([\d,.]+[万wW亿kK]?)(?:粉丝数|粉丝)/);
-      if (m) return this.parseCount(m[1]);
-    }
-    if (platform === 'B站' || platform === '抖音' || platform === '百家号') {
-      m = cleanText.match(/(?:粉丝数|总粉丝|粉丝总数|粉丝)[:：]?([\d,.]+[万wW亿kK]?)/);
-      if (m) return this.parseCount(m[1]);
-    }
-    m = cleanText.match(/(?:粉丝|粉丝数|总粉丝|关注者)[:：]?([\d,.]+[万wW亿kK]?)(?!\/)/);
+    // 通用匹配模式
+    let m = cleanText.match(/(?:粉丝|粉丝数|总粉丝|关注者)[:：]?([\d,.]+[万wW亿kK]?)/);
     if (m) return this.parseCount(m[1]);
     m = cleanText.match(/([\d,.]+[万wW亿kK]?)(?:粉丝|粉丝数|总粉丝)/);
     if (m) return this.parseCount(m[1]);

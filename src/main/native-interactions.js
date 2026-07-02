@@ -351,6 +351,16 @@ export class NativeInteractions {
     };
 
     for (let i = 0; i < text.length; i++) {
+      const code = text.codePointAt(i);
+      // surrogate pair (emoji / extended plane): inject via CDP insertText
+      if (code > 0xFFFF) {
+        await ensureInput();
+        await this.wc.debugger.sendCommand('Input.insertText', { text: String.fromCodePoint(code) });
+        i++; // skip low surrogate
+        const delay = Math.max(25, Math.min(400, this.#gaussianRandom(meanDelay, stddev)));
+        await sleep(delay);
+        continue;
+      }
       const char = text[i];
       const isCJK = /[一-鿿㐀-䶿豈-﫿　-〿＀-￯]/.test(char);
 
@@ -507,30 +517,56 @@ export class NativeInteractions {
 
   /**
    * 执行任意 JavaScript 并返回结果 (带 CDP 降级护盾)
+   * 🔴 静默降级：失败时返回 null，不打印警告（避免刷屏）
    */
-  async evaluate(jsCode) {
+  async evaluate(jsCode, { silent = true } = {}) {
     this.#checkAlive();
     try {
       return await this.wc.executeJavaScript(jsCode);
     } catch (e) {
-      console.warn('🛡️ [NativeInteractions] IPC 拦截到异常:', e.message);
+      if (!silent) console.warn('🛡️ [NativeInteractions] IPC 拦截到异常:', e.message);
 
       // 👑 终极降级：尝试绕过 IPC，使用 CDP 协议直接在 V8 引擎中执行代码
       if (this.wc.debugger && this.wc.debugger.isAttached()) {
         try {
           const res = await this.wc.debugger.sendCommand('Runtime.evaluate', {
             expression: jsCode,
-            returnByValue: true,    // 强制返回 JSON 序列化的值
-            awaitPromise: true      // 支持异步代码
+            returnByValue: true,
+            awaitPromise: true
           });
           if (res && res.result && res.result.value !== undefined) {
-            console.log('🛡️ [NativeInteractions] CDP 降级执行成功！救回一条命。');
+            if (!silent) console.log('🛡️ [NativeInteractions] CDP 降级执行成功！');
             return res.result.value;
           }
         } catch (cdpErr) {
-          console.warn('🛡️ [NativeInteractions] CDP 降级亦失败 (页面可能已死锁):', cdpErr.message);
+          if (!silent) console.warn('🛡️ [NativeInteractions] CDP 降级亦失败:', cdpErr.message);
         }
       }
+
+      // 👑 终极终极降级：尝试 useContentScript 方式
+      if (!silent) {
+        try {
+          const result = await this.wc.executeJavaScript(`
+            (() => {
+              try {
+                const fn = new Function('return (' + atob('${Buffer.from(jsCode).toString('base64')}') + ')()');
+                const rv = fn();
+                return { success: true, value: rv };
+              } catch (e) {
+                return { success: false, error: e.message };
+              }
+            })()
+          `);
+          if (result && result.success) {
+            console.log('🛡️ [NativeInteractions] useContentScript 降级执行成功！');
+            return result.value;
+          }
+          console.warn('🛡️ [NativeInteractions] useContentScript 降级失败:', result?.error);
+        } catch (finalErr) {
+          console.error('🛡️ [NativeInteractions] 所有降级策略均失败:', finalErr.message);
+        }
+      }
+
       return null;
     }
   }
@@ -1190,75 +1226,78 @@ export class NativeInteractions {
       await sleep(400);
 
       // 👑 工业级唤醒：重建完美 File 对象 + 【全局防弹窗死锁防线】
-      await this.wc.executeJavaScript(`
-        (() => {
-          // ==========================================
-          // 🛡️ 1. 绝对防线：没收系统文件对话框的弹出权限
-          // 防止主线程被原生 UI 挂起，防止注入的文件被用户的"取消"操作覆盖
-          // ==========================================
+      try {
+        // 1. 绝对防线：没收系统文件对话框的弹出权限
+        await this.wc.executeJavaScript(`
           const originalClick = HTMLInputElement.prototype.click;
           HTMLInputElement.prototype.click = function() {
             if (this.type === 'file') {
               console.log('🛡️ [Native] 已拦截并粉碎了一次企图弹出文件筐的系统调用！');
-              return; // 直接吃掉点击事件，不弹窗！
+              return;
             }
             originalClick.call(this);
           };
 
-          // 拦截基于原生 File System Access API 的弹窗
           window.showOpenFilePicker = async () => {
             console.log('🛡️ [Native] 已拦截 showOpenFilePicker');
             return [];
           };
+        `).catch(() => {});
 
-          // ==========================================
-          // 📦 2. 提取并修复 CDP 注入的文件
-          // ==========================================
+        // 2. 提取并修复 CDP 注入的文件
+        await this.wc.executeJavaScript(`
           const fileInput = document.querySelector('[data-mx="${marker}"]');
-          if (!fileInput || fileInput.files.length === 0) return;
-
-          console.log('[Native] 提取原始文件句柄...');
-          const originalFile = fileInput.files[0];
-
-          let ext = originalFile.name.split('.').pop().toLowerCase();
-          let mimeType = originalFile.type;
-          if (!mimeType) {
-            if (ext === 'mov') mimeType = 'video/quicktime';
-            else if (ext === 'mp4') mimeType = 'video/mp4';
-            else mimeType = 'video/mp4';
-          }
-
-          const perfectFile = new File([originalFile], originalFile.name, {
-            type: mimeType,
-            lastModified: originalFile.lastModified || Date.now()
-          });
-
-          const dt = new DataTransfer();
-          dt.items.add(perfectFile);
-          fileInput.files = dt.files;
-
-          // ==========================================
-          // 🚀 3. 唤醒 React 状态机
-          // ==========================================
-          // 派发 input 和 change
-          fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-          fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-
-          // 派发 Drop
-          const dropZone = fileInput.closest('.upload-zone, .upload-container, .upload-wrapper') || fileInput.parentElement;
-          if (dropZone) {
-            const dropEvent = new DragEvent('drop', {
-              bubbles: true,
-              cancelable: true,
-              dataTransfer: dt
+          if (fileInput && fileInput.files.length > 0) {
+            const originalFile = fileInput.files[0];
+            let ext = originalFile.name.split('.').pop().toLowerCase();
+            let mimeType = originalFile.type;
+            if (!mimeType) {
+              if (ext === 'mov') mimeType = 'video/quicktime';
+              else if (ext === 'mp4') mimeType = 'video/mp4';
+              else mimeType = 'video/mp4';
+            }
+            const perfectFile = new File([originalFile], originalFile.name, {
+              type: mimeType,
+              lastModified: originalFile.lastModified || Date.now()
             });
-            dropZone.dispatchEvent(dropEvent);
-            console.log('[Native] 完美的 Drop 事件派发完成，上传流已安全启动！');
+            const dt = new DataTransfer();
+            dt.items.add(perfectFile);
+            fileInput.files = dt.files;
           }
-        })();
-      `);
+        `).catch(() => {});
 
-      console.log('[injectFileDirect] 完美 File 重建 + 防弹窗锁死 + 事件派发完成, marker:', marker);
+        // 3. 唤醒 React 状态机 - 派发 input 和 change
+        await this.wc.executeJavaScript(`
+          const fileInput = document.querySelector('[data-mx="${marker}"]');
+          if (fileInput) {
+            fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        `).catch(() => {});
+
+        // 4. 派发 Drop 事件
+        await this.wc.executeJavaScript(`
+          const fileInput = document.querySelector('[data-mx="${marker}"]');
+          if (fileInput) {
+            const dt = new DataTransfer();
+            const dropZone = fileInput.closest('.upload-zone, .upload-container, .upload-wrapper') || fileInput.parentElement;
+            if (dropZone) {
+              const dropEvent = new DragEvent('drop', {
+                bubbles: true,
+                cancelable: true,
+                dataTransfer: dt
+              });
+              dropZone.dispatchEvent(dropEvent);
+              console.log('[Native] 完美的 Drop 事件派发完成，上传流已安全启动！');
+            }
+          }
+        `).catch(() => {});
+
+        console.log('[injectFileDirect] 完美 File 重建 + 防弹窗锁死 + 事件派发完成, marker:', marker);
+      } catch (e) {
+        console.warn('[injectFileDirect] 防弹窗/唤醒步骤部分失败:', e.message);
+        // 不要因此中断整个流程
+      }
 
       // 最后清理 marker
       await this.wc.executeJavaScript(`document.querySelector('[data-mx="${marker}"]')?.removeAttribute('data-mx')`).catch(() => {});
@@ -1267,7 +1306,7 @@ export class NativeInteractions {
         window.dispatchEvent(new Event('focus'));
         delete document.hasFocus;
         0
-      `);
+      `).catch(() => {});
       try { this.wc.focus(); } catch (_) {}
     } catch (e) {
       console.error('[injectFileDirect] 注入失败:', e.message);
@@ -1276,7 +1315,7 @@ export class NativeInteractions {
           window.dispatchEvent(new Event('focus'));
           delete document.hasFocus;
           0
-        `);
+        `).catch(() => {});
       } catch (_) {}
       return false;
     }
@@ -1972,6 +2011,15 @@ export class NativeInteractions {
     try { await this.wc.debugger.sendCommand('Input.enable'); } catch (_) {}
 
     for (let i = 0; i < text.length; i++) {
+      const code = text.codePointAt(i);
+      // surrogate pair (emoji): inject whole codepoint
+      if (code > 0xFFFF) {
+        await this.wc.debugger.sendCommand('Input.insertText', { text: String.fromCodePoint(code) });
+        i++; // skip low surrogate
+        let delay = 50 + Math.random() * 130;
+        await sleep(delay);
+        continue;
+      }
       const char = text[i];
 
       // 逐字符 insertText（比 dispatchKeyEvent 更兼容 ProseMirror 等编辑器）

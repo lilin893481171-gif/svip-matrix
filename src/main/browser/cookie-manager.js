@@ -4,7 +4,7 @@
  */
 
 import { session } from 'electron';
-import { extractSessionIdentity } from './session-store.js';
+import { extractSessionIdentity } from '../session-store.js';
 
 /**
  * 从内嵌浏览器导出 Cookie

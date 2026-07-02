@@ -27,7 +27,11 @@ export default defineConfig({
     },
     plugins: [react()],
     server: {
-      fs: { strict: false }
+      fs: { strict: false },
+      // 🛠️ 自定义 CSP 以允许 matrix-media:// 协议
+      headers: {
+        'Content-Security-Policy': "default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https: http:; media-src 'self' https: http: matrix-media:; connect-src 'self' https: http: ws:;"
+      }
     }
   }
 })

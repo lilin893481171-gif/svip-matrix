@@ -1,12 +1,12 @@
-import { launchSandbox } from './browser-manager.js';
 import { app, shell, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron'
-import { join } from 'path'
+import { fileURLToPath } from 'url'
+import { join, dirname } from 'path'
 import { electronApp, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import path from 'path'
 import fs from 'fs'
 import { execSync, execFile } from 'child_process'
-import { chromium } from 'playwright'
+import { chromium } from 'playwright-core'
 import { initDatabase, registerDatabaseIPC, getDB } from './database.js'
 import { registerRPAEngineIPC, runRPASelfTest, PLATFORM_URLS, PLATFORM_HOME_URLS } from './rpa-engine.js'
 import { registerDataEngineIPC } from './data-engine.js';
@@ -17,6 +17,9 @@ import { registerEmailBrowserIPC, closeEmailBrowser } from './email-browser-mana
 import { attachAccountBrowser, detachAccountBrowser, navigateAccountBrowser, getAccountBrowserUrl, goBackAccountBrowser, goForwardAccountBrowser, reloadAccountBrowser, stopAccountBrowser, getActiveSessions, openAccountBrowserDevTools } from './account-browser-manager.js';
 import { startupCleanStalePartitions } from './safe-delete.js';
 import { startTLSProxy, stopTLSProxy, getTLSProxyRules } from './tls-proxy-launcher.js';
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 
 // 导出给其他模块使用 (account-browser-manager, rpa/browser-controller)
 export { getTLSProxyRules };
@@ -36,21 +39,17 @@ app.commandLine.appendSwitch('disable-quic');
 // 页面需 <video> 自动播放来驱动 WASM 解码器完成首帧解析，autoplay 被拒 → 转码卡住
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
-// 🔐 代理/抓包场景：全平台域名证书白名单静默放行
+// 🔐 代理/抓包场景：通用域名证书白名单静默放行
 // ignore-certificate-errors 仅跳过内置错误页，代理 MITM 证书仍会触发 SSL 握手失败
 // certificate-error 事件在证书链校验阶段拦截，callback(true) 即信任
 const SSL_WHITELIST_DOMAINS = [
-  'douyin.com', 'toutiao.com', 'bytedance.com', 'ibytedtos.com', 'snssdk.com',
-  'kuaishou.com', 'yximgs.com',
-  'weixin.qq.com', 'gtimg.com', 'qpic.cn',
-  'bilibili.com', 'hdslb.com', 'bilivideo.com',
-  'xiaohongshu.com', 'xhscdn.com',
-  'baidu.com', 'bdstatic.com', 'bdimg.com',
+  // 通用 CDN 域名
+  'cdn', 'static', 'img', 'video', 'api'
 ];
 
 function isDomainWhitelisted(hostname) {
   const h = hostname.toLowerCase();
-  return SSL_WHITELIST_DOMAINS.some(d => h === d || h.endsWith('.' + d));
+  return SSL_WHITELIST_DOMAINS.some(d => h.includes(d));
 }
 
 app.on('certificate-error', (_event, _webContents, _url, _error, _certificate, callback) => {
@@ -64,15 +63,17 @@ app.on('certificate-error', (_event, _webContents, _url, _error, _certificate, c
   callback(false); // 其他域名沿用全局策略
 });
 
-	// WebRTC 防泄漏: 掐断局域网 IP 暴露，国内直连矩阵专用
+		// WebRTC 防泄漏: 掐断局域网 IP 暴露，国内直连矩阵专用
 app.commandLine.appendSwitch('webrtc-ip-handling-policy', 'default_public_interface_only');
 
 // 禁用 Blink 自动化特征 (navigator.webdriver / AutomationControlled)
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 console.log('[Network Policy] WebRTC IP 处理策略: default_public_interface_only');
 
+let mainWindow;
+
 function createWindow() {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1440, height: 900, show: false, autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
@@ -119,14 +120,31 @@ function createWindow() {
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.yumatrix.studio')
 
+
   // 🔐 注册 matrix-media:// 自定义协议 — 替代危险的 file:// 直读
   protocol.handle('matrix-media', (request) => {
     try {
-      const filePath = request.url.slice('matrix-media://'.length);
-      const decodedPath = decodeURIComponent(filePath);
-      return net.fetch(`file:///${decodedPath}`);
+      let rawPath = request.url.slice('matrix-media://'.length);
+      // 先解码，再修复 Windows 盘符冒号丢失的问题
+      const decodedPath = decodeURIComponent(rawPath);
+      // 专为 Windows 设计的盘符冒号丢失修复程序
+      let fixedPath = decodedPath;
+      // 检查是否是 Windows 盘符路径（如 D: 或 D/ 开头）
+      if (process.platform === 'win32') {
+        const match = decodedPath.match(/^([a-zA-Z])(?=[\\/])/);
+        if (match) {
+          fixedPath = decodedPath.replace(/^([a-zA-Z])(?=[\\/])/, '$1:');
+        }
+      }
+      const finalPath = `file:///${fixedPath.replace(/\\/g, '/')}`;
+      console.log(`[matrix-media] 收到请求: ${request.url}`);
+      console.log(`[matrix-media] 原始路径: ${rawPath}`);
+      console.log(`[matrix-media] 解码路径: ${decodedPath}`);
+      console.log(`[matrix-media] 修复后路径: ${fixedPath}`);
+      console.log(`[matrix-media] 最终转换: ${finalPath}`);
+      return net.fetch(finalPath);
     } catch (e) {
-      console.warn('[matrix-media] 协议转换失败:', e.message);
+      console.error(`[matrix-media] 协议转换失败: ${e.message}`, { url: request.url });
       return new Response(null, { status: 404 });
     }
   });
@@ -140,7 +158,7 @@ app.whenReady().then(async () => {
 
   initDatabase()
   registerDatabaseIPC()
-  registerRPAEngineIPC()
+  registerRPAEngineIPC(mainWindow)
   registerInteractionEngineIPC();
   registerDataEngineIPC()
   registerDataSyncIPC();
@@ -476,13 +494,13 @@ if ($p) {
   try {
     console.log('====================================');
     console.log('🚀 准备唤醒全域数据罗盘巡逻兵...');
-    
-    const db = getDB(); 
+
+    const db = getDB();
     const dbAccounts = db.prepare('SELECT id, platform FROM accounts').all();
     console.log(`📦 从数据库中查找到 ${dbAccounts.length} 个账号`);
 
     const myAccounts = dbAccounts.map(row => ({
-       accountId: row.id.toString(), 
+       accountId: row.id.toString(),
        platform: row.platform
     }));
 
@@ -497,11 +515,12 @@ if ($p) {
     console.error('❌ 启动静默巡逻兵前发生致命错误 (大概率是数据库查询写错了):', err);
   }
 
-  createWindow()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+
+  createWindow()
 })
 
 // ==================== Electron 退出时的精准清理 ====================

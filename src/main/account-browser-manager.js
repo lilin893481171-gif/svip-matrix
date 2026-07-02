@@ -12,10 +12,15 @@ import { FingerprintGenerator } from 'fingerprint-generator';
 import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 import { getDB } from './database.js';
 import { attachOnboardingSniffer, teardownOnboardingSniffer } from './account-onboarding.js';
 import { getTLSProxyRules, isTLSProxyRunning } from './tls-proxy-launcher.js';
 import { secureAtomicWriteFileSync, secureReadFileSync } from './utils/crypto-io.js';
+import { setSession, getSession, removeSession, hasSession, getActiveSessions, getAllSessions, extractSessionIdentity } from './session-store.js';
 
 
 // ======================================
@@ -29,8 +34,9 @@ const STATES_DIR = path.join(process.cwd(), 'account_states');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
-const activeSessions = new Map();
 const sslRetryCount = new Map();  // 防 SSL 重试死循环
+
+let debugPanelMargin = 0
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -723,6 +729,27 @@ export function buildSessionEnvironmentScript(fp, accountId) {
       }, 'queryLocalFonts');
     }
 
+    // ---- 锁定页面可见性 — 防止 BrowserView 隐藏/显示导致页面重载 ----
+    try {
+    (function() {
+      Object.defineProperty(document, 'hidden', {
+        get: function() { return false; },
+        configurable: true
+      });
+      Object.defineProperty(document, 'visibilityState', {
+        get: function() { return 'visible'; },
+        configurable: true
+      });
+      document.addEventListener('visibilitychange', function(e) {
+        e.stopImmediatePropagation();
+      }, true);
+      window.addEventListener('pagehide', function(e) {
+        e.stopImmediatePropagation();
+      }, true);
+      console.log('[Matrix Shield] page visibility locked');
+    })();
+    } catch(e) {}
+
     console.log('[Matrix Shield] 原生会话环境配置已部署 (BrowserView/CDP)');
   } catch (e) {
     console.warn('[Matrix Shield] 环境配置注入部分失败:', e.message);
@@ -742,9 +769,23 @@ export function buildSessionEnvironmentScript(fp, accountId) {
 export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
   const key = String(accountId);
 
-  if (activeSessions.has(key)) {
-    console.log(`[Session Manager] 账号 ${key} 已有活跃会话，先销毁...`);
-    await closeEmbeddedAccountBrowser(key);
+  const existingSession = getSession(key);
+  if (existingSession) {
+    console.log(`[Session Manager] 账号 ${key} 已有活跃会话，直接复用。`);
+    const { view, webContents, mainWindow } = existingSession;
+
+    if (options.targetUrl && webContents.getURL() !== options.targetUrl) {
+      console.log(`[Session Manager] 导航到新目标: ${options.targetUrl}`);
+      webContents.loadURL(options.targetUrl);
+    }
+
+    // 确保 BrowserView 在顶层
+    if (mainWindow && !mainWindow.isDestroyed() && view) {
+      // bring-to-front
+      mainWindow.setTopBrowserView(view);
+    }
+
+    return { success: true, webContents, view, reused: true };
   }
 
   const windows = BrowserWindow.getAllWindows();
@@ -771,7 +812,8 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
   const view = new BrowserView({
     webPreferences: {
       partition: `persist:chrome_data_${key}`,
-      sandbox: true,
+      preload: join(__dirname, '../preload/index.mjs'),
+      sandbox: false,
       contextIsolation: true,
       webSecurity: true,
       allowRunningInsecureContent: true
@@ -816,6 +858,9 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
     callback(true);
   });
 
+  // ─── 静默身份提取防抖 (避免重复导航时频发提取) ───
+  const identityExtractDebounce = new Map();
+
   wc.on('did-finish-load', () => {
     try {
       const url = wc.getURL();
@@ -825,6 +870,34 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
       }
       if (url && !url.startsWith('about:') && !url.startsWith('devtools://')) {
         wc.executeJavaScript(sessionEnvironmentScript).catch(() => {});
+      }
+
+      // 🔑 v6 静默身份提取: B站会员中心页面加载完成 → 自动提取 Cookie/UA/bili_jct
+      if (url && url.includes('member.bilibili.com')) {
+        const lastExtract = identityExtractDebounce.get(key) || 0;
+        const now = Date.now();
+        if (now - lastExtract > 15_000) { // 15秒防抖
+          identityExtractDebounce.set(key, now);
+          // 延迟 3s 等登录态 Cookie 完全写入
+          setTimeout(async () => {
+            try {
+              if (!sessionData || !sessionData.webContents || sessionData.webContents.isDestroyed()) return;
+              let ua = 'unknown';
+              try { ua = sessionData.webContents.getUserAgent() } catch (_) {}
+              const identity = await extractSessionIdentity(sessionData.webContents.session, key, ua);
+              sessionData.identity = identity;
+              sessionData.identityExtractedAt = Date.now();
+              console.log('[Identity] 静默提取完成:', {
+                accountId: key,
+                cookies: identity.cookies.slice(0, 60) + '...',
+                hasBiliJct: !!identity.biliJct,
+                uaPreview: identity.ua.slice(0, 60) + '...',
+              });
+            } catch (e) {
+              console.warn('[Identity] 静默提取失败:', e.message);
+            }
+          }, 3000);
+        }
       }
     } catch (e) {}
   });
@@ -935,7 +1008,7 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
     fingerprintData,
     currentUrl: options.targetUrl || 'about:blank'
   };
-  activeSessions.set(key, sessionData);
+  setSession(key, sessionData);
 
   // ─── 加载目标 URL ───
   if (options.targetUrl) {
@@ -957,7 +1030,7 @@ export async function launchEmbeddedAccountBrowser(accountId, options = {}) {
 
 export function attachAccountBrowser(accountId, bounds) {
   const key = String(accountId);
-  const session = activeSessions.get(key);
+  const session = getSession(key);
   if (!session || !session.view) return;
   try {
     if (session.mainWindow && !session.mainWindow.isDestroyed()) {
@@ -965,17 +1038,38 @@ export function attachAccountBrowser(accountId, bounds) {
     }
   } catch (e) {}
   try {
-    session.view.setBounds(bounds);
-    // 自适应缩放：以 1280px 为基准，容器变窄时等比缩小内容
+    // 保存原始 bounds，用于调试面板开关时恢复
+    session._lastBounds = { ...bounds }
+    const adjusted = debugPanelMargin > 0
+      ? { ...bounds, width: Math.max(200, bounds.width - debugPanelMargin) }
+      : bounds
+    session.view.setBounds(adjusted);
     const targetWidth = 1280;
-    const zoom = Math.min(1, Math.max(0.25, bounds.width / targetWidth));
+    const zoom = Math.min(1, Math.max(0.25, adjusted.width / targetWidth));
     session.webContents.setZoomFactor(zoom);
   } catch (e) {}
 }
 
+export function setDebugPanelMargin(margin) {
+  debugPanelMargin = margin
+  for (const [key, session] of getAllSessions()) {
+    if (!session.view || !session._lastBounds) continue
+    try {
+      const base = session._lastBounds
+      const adjusted = margin > 0
+        ? { ...base, width: Math.max(200, base.width - margin) }
+        : { ...base }
+      session.view.setBounds(adjusted)
+      const targetWidth = 1280;
+      const zoom = Math.min(1, Math.max(0.25, adjusted.width / targetWidth));
+      session.webContents.setZoomFactor(zoom);
+    } catch (e) { /* ignore */ }
+  }
+}
+
 export function detachAccountBrowser(accountId) {
   const key = String(accountId);
-  const session = activeSessions.get(key);
+  const session = getSession(key);
   if (!session || !session.view) return;
   try {
     session.view.setBounds({ x: -10000, y: -10000, width: 1280, height: 800 });
@@ -988,7 +1082,7 @@ export function detachAccountBrowser(accountId) {
 
 export async function closeEmbeddedAccountBrowser(accountId) {
   const key = String(accountId);
-  const session = activeSessions.get(key);
+  const session = getSession(key);
   if (!session) return;
 
   // 清理入网嗅探
@@ -1004,7 +1098,7 @@ export async function closeEmbeddedAccountBrowser(accountId) {
     }
   } catch (e) {}
 
-  activeSessions.delete(key);
+  removeSession(key);
   sslRetryCount.delete(key);
 }
 
@@ -1014,7 +1108,7 @@ export async function closeEmbeddedAccountBrowser(accountId) {
 
 export function navigateAccountBrowser(accountId, url) {
   const key = String(accountId);
-  const session = activeSessions.get(key);
+  const session = getSession(key);
   if (!session) return false;
   let finalUrl = url.trim();
   if (!/^https?:\/\//i.test(finalUrl) && !finalUrl.startsWith('about:') && !finalUrl.startsWith('file:')) {
@@ -1026,7 +1120,7 @@ export function navigateAccountBrowser(accountId, url) {
 
 export function getAccountBrowserUrl(accountId) {
   const key = String(accountId);
-  const session = activeSessions.get(key);
+  const session = getSession(key);
   if (!session) return null;
   if (session.currentUrl) return session.currentUrl;
   try {
@@ -1037,58 +1131,50 @@ export function getAccountBrowserUrl(accountId) {
 
 export function goBackAccountBrowser(accountId) {
   const key = String(accountId);
-  const session = activeSessions.get(key);
+  const session = getSession(key);
   if (!session || !session.webContents || session.webContents.isDestroyed()) return;
   if (session.webContents.canGoBack()) session.webContents.goBack();
 }
 
 export function goForwardAccountBrowser(accountId) {
   const key = String(accountId);
-  const session = activeSessions.get(key);
+  const session = getSession(key);
   if (!session || !session.webContents || session.webContents.isDestroyed()) return;
   if (session.webContents.canGoForward()) session.webContents.goForward();
 }
 
 export function reloadAccountBrowser(accountId) {
   const key = String(accountId);
-  const session = activeSessions.get(key);
+  const session = getSession(key);
   if (!session || !session.webContents || session.webContents.isDestroyed()) return;
   session.webContents.reload();
 }
 
 export function stopAccountBrowser(accountId) {
   const key = String(accountId);
-  const session = activeSessions.get(key);
+  const session = getSession(key);
   if (!session || !session.webContents || session.webContents.isDestroyed()) return;
   session.webContents.stop();
 }
 
 export function openAccountBrowserDevTools(accountId) {
   const key = String(accountId);
-  const session = activeSessions.get(key);
+  const session = getSession(key);
   if (!session || !session.webContents || session.webContents.isDestroyed()) return false;
   session.webContents.openDevTools({ mode: 'detach' });
   return true;
 }
 
-export function getActiveSessions() {
-  const sessions = [];
-  for (const [id, session] of activeSessions) {
-    try {
-      let url = 'about:blank';
-      if (session.currentUrl) url = session.currentUrl;
-      else if (session.webContents && !session.webContents.isDestroyed()) url = session.webContents.getURL();
-      sessions.push({ accountId: id, currentUrl: url });
-    } catch (e) {
-      sessions.push({ accountId: id, currentUrl: 'about:blank' });
-    }
-  }
-  return sessions;
+export function isNativeSandboxActive(accountId) {
+  return hasSession(String(accountId));
 }
 
-export function isNativeSandboxActive(accountId) {
-  return activeSessions.has(String(accountId));
+export function getSessionByAccountId(accountId) {
+  return getSession(String(accountId)) || null;
 }
+
+// Re-export from session-store for external callers (index.js, data-engine.js)
+export { getActiveSessions } from './session-store.js';
 
 // ======================================
 // 9. Cookie 导出/导入
@@ -1096,7 +1182,7 @@ export function isNativeSandboxActive(accountId) {
 
 export async function exportCookiesForPlaywright(accountId) {
   const key = String(accountId);
-  const session = activeSessions.get(key);
+  const session = getSession(key);
   if (!session) return null;
 
   try {
@@ -1121,7 +1207,7 @@ export async function importCookiesFromPlaywright(accountId) {
   try {
     const state = secureReadFileSync(stateFilePath, key);
     if (!state.cookies) return false;
-    const session = activeSessions.get(key);
+    const session = getSession(key);
     if (!session) return false;
 
     for (const cookie of state.cookies) {

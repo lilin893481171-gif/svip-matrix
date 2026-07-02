@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Mail, Plus, Search, Star, Send, Trash2, Inbox, Clock, Paperclip,
   Sparkles, Settings, ChevronDown, ChevronRight, X, AtSign,
@@ -10,9 +10,94 @@ import DOMPurify from 'dompurify';
 import usePersistentState from '../../../hooks/usePersistentState';
 import { useToast } from '../../ToastContext';
 import { cfApiUrl, authHeaders } from '../../../config/matrixConfig';
+import { uploadToR2, isLargeAttachment, generateDownloadCard, formatSize, SIZE_THRESHOLD } from '../../../services/r2Upload';
 
 // ─── 文件夹列表 ───
 const FOLDERS = ['收件箱', '已发送', '草稿箱', '垃圾邮件', '已删除'];
+
+// ─── 邮件正文 iframe 沙箱组件 ───
+function EmailBodyIframe({ html, onClickLink }) {
+  const iframeRef = useRef(null);
+
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+
+    const cleanHtml = DOMPurify.sanitize(html);
+
+    const onLoad = () => {
+      const doc = iframe.contentDocument;
+      if (!doc) return;
+      doc.open();
+      doc.write(`<!DOCTYPE html><html><head><style>
+        body {
+          margin: 0; padding: 8px 0;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          font-size: 14px; line-height: 1.6; color: #d4d4d8; word-break: break-word;
+          background: transparent;
+        }
+        a { color: #818cf8; cursor: pointer; }
+        a:hover { text-decoration: underline; }
+        img { max-width: 100% !important; height: auto !important; }
+        table { max-width: 100% !important; border-collapse: collapse; }
+        td, th { word-break: break-word; }
+        blockquote { border-left: 3px solid #52525b; padding-left: 12px; margin-left: 0; color: #a1a1aa; }
+      </style></head><body>${cleanHtml}</body></html>`);
+      doc.close();
+
+      // 在 iframe 内部注入点击监听器，捕获链接点击事件
+      try {
+        const body = doc.body;
+        body.addEventListener('click', (e) => {
+          const link = e.target.closest('a[href]');
+          if (link) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (onClickLink && typeof onClickLink === 'function') {
+              onClickLink(link.href);
+            }
+          }
+        }, { capture: true });
+      } catch (e) {
+        console.error('[EmailBodyIframe] 注入点击监听失败:', e);
+      }
+
+      const resize = () => {
+        const h = doc.documentElement?.scrollHeight || doc.body?.scrollHeight || 300;
+        iframe.style.height = Math.max(h + 16, 100) + 'px';
+      };
+      resize();
+      const imgs = doc.querySelectorAll('img');
+      imgs.forEach(img => img.addEventListener('load', resize));
+      const timer = setTimeout(resize, 500);
+      iframe._cleanup = () => {
+        clearTimeout(timer);
+        imgs.forEach(img => img.removeEventListener('load', resize));
+      };
+    };
+
+    // 如果 iframe 已经 load（热更新场景），直接执行
+    if (iframe.contentDocument?.readyState === 'complete') {
+      onLoad();
+    } else {
+      iframe.addEventListener('load', onLoad, { once: true });
+    }
+
+    return () => {
+      iframe.removeEventListener('load', onLoad);
+      iframe._cleanup?.();
+    };
+  }, [html, onClickLink]);
+
+  return (
+    <iframe
+      ref={iframeRef}
+      title="邮件正文"
+      className="w-full border-0 bg-transparent"
+      style={{ minHeight: 100 }}
+    />
+  );
+}
 
 export default function EmailMatrixPanel() {
   const { addToast } = useToast();
@@ -134,13 +219,22 @@ export default function EmailMatrixPanel() {
   }, [selectedAccount]);
 
   // ─── 链接点击 → 打开悬浮浏览器 ───
+  // e: Event | string - 事件对象（外部点击）或 URL 字符串（iframe 内部点击）
   const handleEmailBodyClick = async (e) => {
-    const link = e.target.closest('a[href]');
-    if (!link) return;
-    e.preventDefault();
-    e.stopPropagation();
+    let url;
+    if (typeof e === 'string') {
+      // 来自 iframe 内部点击
+      url = e;
+    } else {
+      // 来自外层容器点击
+      const link = e.target.closest('a[href]');
+      if (!link) return;
+      e.preventDefault();
+      e.stopPropagation();
+      url = link.href;
+    }
     try {
-      await window.electron.ipcRenderer.invoke('email-browser-open', { url: link.href });
+      await window.electron.ipcRenderer.invoke('email-browser-open', { url });
     } catch (err) {
       console.error('打开链接失败:', err);
     }
@@ -218,6 +312,11 @@ export default function EmailMatrixPanel() {
   const composeFrom = composeState.from || selectedAccount || '';
   const updateCompose = (patch) => setComposeState(prev => ({ ...prev, ...patch }));
   const attachments = composeState.attachments || [];
+
+  // ── R2 云盘上传状态 ──
+  const [cloudUploading, setCloudUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadFileName, setUploadFileName] = useState('');
 
   const activeAccount = accounts.find(a => a.id === selectedAccount);
 
@@ -305,15 +404,54 @@ export default function EmailMatrixPanel() {
     }
     setSending(true);
     try {
+      // ── 分离大附件 (≥15MB) 和小附件 ──
+      const largeFiles = [];
+      const smallFiles = [];
+      for (const a of attachments) {
+        if (isLargeAttachment(a)) largeFiles.push(a);
+        else smallFiles.push(a);
+      }
+
+      let extraBody = '';
+
+      // ── 大附件 → R2 云盘通道 ──
+      if (largeFiles.length > 0) {
+        setCloudUploading(true);
+        for (const f of largeFiles) {
+          setUploadFileName(f.name);
+          setUploadProgress(0);
+          try {
+            const { downloadUrl } = await uploadToR2(f, setUploadProgress);
+            extraBody += generateDownloadCard(f.name, f.size, downloadUrl);
+            addToast('success', '云盘上传成功', `${f.name} 已上传到极速通道`);
+          } catch (e) {
+            addToast('error', '云盘上传失败', `${f.name}: ${e.message}`);
+            // 上传失败的文件降级为 SMTP 附件（可能触发 552）
+            smallFiles.push(f);
+          }
+        }
+        setCloudUploading(false);
+        setUploadFileName('');
+        setUploadProgress(0);
+      }
+
+      // ── 构建最终 HTML（正文 + 云盘下载卡片）──
+      const baseHtml = `<div style="font-family:sans-serif;font-size:14px;line-height:1.6;">${composeBody.replace(/\n/g, '<br/>')}</div>`;
+      const finalHtml = baseHtml + extraBody;
+
+      // ── 小附件走 SMTP ──
       const result = await window.electron.ipcRenderer.invoke('email-send', {
         accountId: composeFrom || selectedAccount,
         to: composeTo,
         subject: composeSubject,
-        bodyHtml: `<div style="font-family:sans-serif;font-size:14px;line-height:1.6;">${composeBody.replace(/\n/g, '<br/>')}</div>`,
-        attachments: attachments.map(a => ({ filePath: a.path, filename: a.name, mimeType: a.type })),
+        bodyHtml: finalHtml,
+        attachments: smallFiles.map(a => ({ filePath: a.path, filename: a.name, mimeType: a.type })),
       });
       if (result?.success) {
-        addToast('success', '邮件已发送', `${composeTo} 将在数秒内收到`);
+        const msg = largeFiles.length > 0
+          ? `已发送（含 ${largeFiles.length} 个云盘附件）`
+          : `${composeTo} 将在数秒内收到`;
+        addToast('success', '邮件已发送', msg);
         setComposeMode(false);
         updateCompose({ to: '', subject: '', body: '', attachments: [] });
       } else {
@@ -732,15 +870,31 @@ export default function EmailMatrixPanel() {
                     <Paperclip size={16} />
                   </button>
                   {attachments.length > 0 && (
-                    <div className="flex items-center gap-1">
-                      {attachments.map((a, i) => (
-                        <span key={i} className="text-[10px] bg-zinc-800 text-zinc-300 px-2 py-1 rounded flex items-center gap-1">
-                          {a.name}
-                          <button onClick={() => setComposeState(prev => ({ ...prev, attachments: (prev.attachments || []).filter((_, j) => j !== i) }))} className="text-zinc-500 hover:text-zinc-200">
-                            <X size={10} />
-                          </button>
-                        </span>
-                      ))}
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {attachments.map((a, i) => {
+                        const isLarge = a.size > SIZE_THRESHOLD;
+                        return (
+                          <span key={i} className={`text-[10px] px-2 py-1 rounded flex items-center gap-1 ${isLarge ? 'bg-sky-900/50 text-sky-300 border border-sky-700/50' : 'bg-zinc-800 text-zinc-300'}`}>
+                            {isLarge && <span title="将通过云盘通道发送">☁️</span>}
+                            {a.name}
+                            <span className="text-zinc-500">{formatSize(a.size)}</span>
+                            <button onClick={() => setComposeState(prev => ({ ...prev, attachments: (prev.attachments || []).filter((_, j) => j !== i) }))} className="text-zinc-500 hover:text-zinc-200 ml-1">
+                              <X size={10} />
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {/* R2 云盘上传进度 */}
+                  {cloudUploading && (
+                    <div className="flex items-center gap-2 text-[11px] text-sky-400">
+                      <Loader2 size={12} className="animate-spin" />
+                      <span>☁️ 上传中: {uploadFileName}</span>
+                      <div className="w-20 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                        <div className="h-full bg-sky-500 rounded-full transition-all" style={{ width: `${uploadProgress}%` }} />
+                      </div>
+                      <span>{uploadProgress}%</span>
                     </div>
                   )}
                 </div>
@@ -841,17 +995,14 @@ export default function EmailMatrixPanel() {
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6 space-y-4" onClick={handleEmailBodyClick}>
+              <div className="flex-1 overflow-auto p-6 space-y-4" onClick={handleEmailBodyClick}>
                 {selectedEmail.bodyLoading ? (
                   <div className="flex items-center gap-3 text-zinc-500 py-8">
                     <Loader2 size={20} className="animate-spin text-indigo-400" />
                     <span className="text-sm">正在加载邮件正文...</span>
                   </div>
                 ) : selectedEmail.body ? (
-                  <div
-                    className="prose prose-invert prose-sm max-w-none text-zinc-300 leading-relaxed"
-                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(selectedEmail.body) }}
-                  />
+                  <EmailBodyIframe html={selectedEmail.body} onClickLink={handleEmailBodyClick} />
                 ) : (
                   <div className="text-sm text-zinc-500 py-8">
                     <p className="mb-2">无法加载邮件正文</p>

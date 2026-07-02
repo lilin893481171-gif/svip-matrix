@@ -8,5 +8,8 @@ export function toMatrixMediaUrl(filePath) {
   if (filePath.startsWith('matrix-media://')) return filePath;
   if (filePath.startsWith('data:')) return filePath;
   if (filePath.startsWith('blob:')) return filePath;
-  return `matrix-media://${filePath.replace(/\\/g, '/')}`;
+  // 先转换反斜杠，再用 encodeURI 编码中文和空格（保留 :/ 等合法路径分隔符）
+  // encodeURI 不会编码 A-Z a-z 0-9 ; , / ? : @ & = + $ - _ . ! ~ * ' ( ) #
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  return `matrix-media://${encodeURI(normalizedPath)}`;
 }

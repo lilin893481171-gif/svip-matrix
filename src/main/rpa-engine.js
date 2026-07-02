@@ -14,18 +14,26 @@
  */
 import { BrowserWindow, ipcMain } from 'electron';
 import os from 'os';
-import { loadPendingTasks, clearPendingTasks, addTaskToQueue, removeTaskFromQueue } from './startup-task-manager.mjs';
+import { loadPendingTasks, clearPendingTasks, addTaskToQueue, removeTaskFromQueue, isTaskCompleted } from './startup-task-manager.mjs';
 
 import { BrowserController } from './rpa/browser-controller.js';
 import { ScriptManager } from './rpa/script-manager.js';
 import { runRPASelfTest } from './rpa/self-test.js';
 import { getDB } from './database.js';
 import { closeEmbeddedAccountBrowser, getSessionByAccountId } from './account-browser-manager.js';
-import { extractSessionIdentity } from './session-store.js';
+import { extractSessionIdentity, startXHSSessionKeeper } from './session-store.js';
 import { executePublishTask } from './Publisher.js';
+
+// 导入新的 Playwright 执行器
+import { PlaywrightExecutor } from './playwright/PlaywrightExecutor.js';
 
 const DEFAULT_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36';
+
+// 全局配置
+let globalConfig = {
+  usePlaywright: false // 默认不使用 Playwright 执行器
+};
 
 // ==========================================
 // 0. CancelToken — 同步中断检查
@@ -70,18 +78,10 @@ const CONFIG = {
   HARD_TIMEOUT: 30 * 60_000,
 };
 
-const getUrl = (b64) => Buffer.from(b64, 'base64').toString('utf-8');
-
-export const PLATFORM_URLS = {
-  '抖音': getUrl('aHR0cHM6Ly9jcmVhdG9yLmRvdXlpbi5jb20vY3JlYXRvci1taWNyby9ob21l'),
-  '快手': getUrl('aHR0cHM6Ly9jcC5rdWFpc2hvdS5jb20vcHJvZmlsZQ=='),
-  '微信视频号': getUrl('aHR0cHM6Ly9jaGFubmVscy53ZWl4aW4ucXEuY29tL3BsYXRmb3Jt'),
-  'B站': getUrl('aHR0cHM6Ly9tZW1iZXIuYmlsaWJpbGkuY29tL3BsYXRmb3JtL3VwbG9hZC92aWRlby9mcmFtZQ=='),
-  '小红书': getUrl('aHR0cHM6Ly9jcmVhdG9yLnhpYW9ob25nc2h1LmNvbS9uZXcvaG9tZQ=='),
-  '百家号': getUrl('aHR0cHM6Ly9iYWlqaWFoYW8uYmFpZHUuY29tL2J1aWxkZXIvcmMvaG9tZQ==')
-};
-
-export const PLATFORM_HOME_URLS = { ...PLATFORM_URLS };
+// 平台URL映射 - 从 PlatformRegistry 动态获取
+// 旧代码已移除硬编码平台URL，改用插件架构
+export const PLATFORM_URLS = {};
+export const PLATFORM_HOME_URLS = {};
 
 export let currentBrowserController = null;
 
@@ -156,7 +156,33 @@ const ExecutorState = Object.freeze({
 class TaskExecutor {
   constructor(task) {
     this.task = task;
+    // 检查是否应该使用 Playwright 执行器
+    this.usePlaywright = task.usePlaywright || globalConfig.usePlaywright || false; // 可以通过任务配置或全局配置控制
     this.browserController = new BrowserController(task.accountId);
+    this.playwrightExecutor = this.usePlaywright ? new PlaywrightExecutor({
+      accountId: task.accountId,
+      platform: task.platform,
+      taskData: task,
+      onProgress: (progress, message) => {
+        broadcastProgress(
+          this.task.taskId,
+          this.task.historyId,
+          this.task.videoId,
+          message,
+          { progress, statusType: 'running', startTime: this.startTime }
+        );
+      },
+      onLog: (message) => {
+        broadcastProgress(
+          this.task.taskId,
+          this.task.historyId,
+          this.task.videoId,
+          message,
+          { statusType: 'running', startTime: this.startTime }
+        );
+      }
+    }) : null;
+
     this.cancelToken = new CancelToken();
     this.state = ExecutorState.PENDING;
     this.startTime = Date.now();
@@ -181,7 +207,21 @@ class TaskExecutor {
     this.cancelToken.cancel(reason);
     this.state = ExecutorState.CANCELLED;
     this._stopHeartbeat();
-    try { await this.browserController.terminate(); } catch (e) {
+
+    // 如果使用 Playwright 执行器，取消它
+    if (this.usePlaywright && this.playwrightExecutor) {
+      try {
+        await this.playwrightExecutor.cancel();
+      } catch (e) {
+        console.warn('[TaskExecutor] forceKill PlaywrightExecutor.cancel() 失败:', e.message);
+      }
+      return;
+    }
+
+    // 否则使用原有的逻辑
+    try {
+      await this.browserController.terminate();
+    } catch (e) {
       console.warn('[TaskExecutor] forceKill terminate() 失败:', e.message);
     }
   }
@@ -190,6 +230,56 @@ class TaskExecutor {
     const { taskId, historyId, videoId, platform } = this.task;
     const ct = this.cancelToken;
 
+    // 如果使用 Playwright 执行器，直接调用它
+    if (this.usePlaywright) {
+      try {
+        this.state = ExecutorState.STARTING;
+        this._startHeartbeat();
+
+        if (ct.wasCancelled()) {
+          broadcastProgress(taskId, historyId, videoId, '任务已取消', {
+            statusType: 'cancelled', startTime: this.startTime
+          });
+          return;
+        }
+
+        broadcastProgress(taskId, historyId, videoId, '启动 Playwright 任务执行器...', { startTime: this.startTime });
+
+        // 运行 Playwright 执行器
+        const result = await this.playwrightExecutor.execute();
+
+        this._stopHeartbeat();
+
+        if (result.success) {
+          this.state = ExecutorState.SUCCESS;
+          broadcastProgress(taskId, historyId, videoId, '任务圆满成功', {
+            statusType: 'success', startTime: this.startTime, endTime: Date.now()
+          });
+        } else {
+          this.state = ExecutorState.FAILED;
+          broadcastProgress(taskId, historyId, videoId, '流程受阻: ' + result.error, {
+            statusType: 'error', error: result.error, startTime: this.startTime, endTime: Date.now()
+          });
+        }
+      } catch (error) {
+        this._stopHeartbeat();
+        if (ct.wasCancelled() || error.message === 'CANCELLED') {
+          this.state = ExecutorState.CANCELLED;
+          broadcastProgress(taskId, historyId, videoId, '任务已取消', {
+            statusType: 'cancelled', startTime: this.startTime
+          });
+        } else {
+          this.state = ExecutorState.FAILED;
+          console.error('🔴 [PlaywrightExecutor]:', error);
+          broadcastProgress(taskId, historyId, videoId, '流程受阻: ' + error.message, {
+            statusType: 'error', error: error.message, startTime: this.startTime, endTime: Date.now()
+          });
+        }
+      }
+      return;
+    }
+
+    // 否则使用原有的执行逻辑
     let wc = null;
     let interactions = null;
 
@@ -208,6 +298,21 @@ class TaskExecutor {
       const result = await this.browserController.launch({ isTestRun: !!this.task.isTest }); // ✨ PASS isTest FLAG
       wc = result.webContents;
       interactions = result.interactions;
+
+      // 启动小红书会话保持器（如果是小红书平台）
+      let sessionKeeperCleanup = null;
+      if (platform === '小红书') {
+        try {
+          sessionKeeperCleanup = await startXHSSessionKeeper(this.task.accountId);
+          if (sessionKeeperCleanup) {
+            broadcastProgress(taskId, historyId, videoId, '🔒 会话保持器已启动', {
+              statusType: 'session_keeper_started', startTime: this.startTime
+            });
+          }
+        } catch (e) {
+          console.warn('[TaskExecutor] 会话保持器启动失败:', e.message);
+        }
+      }
 
       if (ct.wasCancelled()) {
         broadcastProgress(taskId, historyId, videoId, '任务已取消', {
@@ -427,7 +532,7 @@ class TaskExecutor {
         });
       } else {
         this.state = ExecutorState.FAILED;
-        console.error("\n🔴 [TaskExecutor]:", error, "\n");
+        console.error('🔴 [TaskExecutor]:', error);
         broadcastProgress(taskId, historyId, videoId, '流程受阻: ' + error.message, {
           statusType: 'error', error: error.message, startTime: this.startTime, endTime: Date.now()
         });
@@ -435,6 +540,17 @@ class TaskExecutor {
       }
     } finally {
       this._stopHeartbeat();
+      // 清理会话保持器
+      if (sessionKeeperCleanup && typeof sessionKeeperCleanup === 'function') {
+        try {
+          sessionKeeperCleanup();
+          console.log('[TaskExecutor] 会话保持器已清理');
+        } catch (e) {
+          console.warn('[TaskExecutor] 会话保持器清理失败:', e.message);
+        }
+      }
+      // 任务完成/取消/失败时才分离 BrowserView
+      try { ipcMain.emit('detach-robot-view'); } catch (_) {}
       if (!this._manualTakeover && this.state !== ExecutorState.MANUAL) {
         await this.browserController.close();
       }
@@ -706,7 +822,18 @@ const taskManager = new TaskManager();
 // ==========================================
 // 5. IPC 注册
 // ==========================================
-export const registerRPAEngineIPC = () => {
+
+// 🚨 新增：用于管理独立控制窗口的变量
+let controlWindow = null;
+let mainWindowRef = null; // 主窗口的引用
+let controlWindowSyncListeners = null; // 用于存储同步事件的监听器
+
+export const registerRPAEngineIPC = (mainWin) => {
+  mainWindowRef = mainWin; // 保存主窗口的引用
+  if (!mainWindowRef) {
+    console.error('[RPAEngine] 主窗口引用为空!');
+    return;
+  }
   ScriptManager.init();
 
   taskManager.cleanupOrphanState();
@@ -718,7 +845,19 @@ export const registerRPAEngineIPC = () => {
       const pendingTasks = loadPendingTasks();
       if (pendingTasks.length > 0) {
         console.log(`[RPAEngine] 启动时加载 ${pendingTasks.length} 个待处理任务`);
-        for (const task of pendingTasks) {
+
+        // 过滤掉已完成的任务，避免重复执行
+        const activeTasks = pendingTasks.filter(task => {
+          const completed = isTaskCompleted(task);
+          if (completed) {
+            console.log(`[RPAEngine] 跳过已完成的任务: ${task.taskId} (${task.historyId})`);
+          }
+          return !completed;
+        });
+
+        console.log(`[RPAEngine] 实际恢复 ${activeTasks.length} 个未完成任务`);
+
+        for (const task of activeTasks) {
           taskManager.addTask(task);
         }
         // 清空已加载的任务队列
@@ -735,6 +874,14 @@ export const registerRPAEngineIPC = () => {
     const task = { ...taskData, taskId };
     taskManager.addTask(task);
     return { success: true, taskId, message: '发布任务已加入队列' };
+  });
+
+  // 添加控制是否使用 Playwright 执行器的 IPC 处理程序
+  ipcMain.handle('set-use-playwright', async (event, usePlaywright) => {
+    // 更新全局配置
+    globalConfig.usePlaywright = usePlaywright;
+    console.log(`[RPAEngine] 设置使用 Playwright 执行器: ${usePlaywright}`);
+    return { success: true, usePlaywright };
   });
 
   ipcMain.handle('retry-publish', async (event, originalTask) => {
@@ -828,21 +975,118 @@ export const registerRPAEngineIPC = () => {
 
   ipcMain.handle('cancel-task', (event, taskId) => taskManager.cancelTask(taskId));
 
-  ipcMain.on('attach-robot-view', (event, { taskId, bounds }) => {
+  // v3 新增: 重新连接 BrowserView（前端页面切换回来时调用）
+  ipcMain.on('reconnect-task-monitor', (event, historyId) => {
     try {
-      const executor = taskManager.getRunningExecutor(taskId);
-      if (executor && executor.browserController) {
-        executor.browserController.attachToWindow(bounds);
+      const executor = taskManager.getRunningExecutor(historyId);
+      if (executor && executor.browserController?.view && !executor.browserController.view.webContents?.isDestroyed()) {
+        // BrowserView 仍在运行，只是被 detach 了
         currentBrowserController = executor.browserController;
+        // 广播当前状态给前端
+        const { taskId, videoId, platform } = executor.task;
+        broadcastProgress(taskId, historyId, videoId, '任务执行中...', {
+          statusType: 'running',
+          startTime: executor.startTime
+        });
+        console.log(`[RPAEngine] BrowserView 重新连接: ${historyId}`);
+      } else {
+        console.log(`[RPAEngine] 任务 ${historyId} 不在运行中或已被销毁`);
       }
-    } catch (e) { console.error('[IPC] attach-robot-view:', e.message); }
+    } catch (e) {
+      console.error('[IPC] reconnect-task-monitor:', e.message);
+    }
   });
 
+  // 🚨 [核心改造] attach-robot-view 不再贴靠，而是打开独立窗口
+  ipcMain.on('attach-robot-view', (event, { taskId, bounds }) => {
+    if (controlWindow && !controlWindow.isDestroyed()) {
+      controlWindow.focus();
+      return;
+    }
+
+    const executor = taskManager.getRunningExecutor(taskId);
+    if (!executor || !executor.browserController || !executor.browserController.view) {
+      console.warn(`[attach-robot-view] 找不到任务 ${taskId} 的可用 BrowserView`);
+      return;
+    }
+
+    if (!mainWindowRef || mainWindowRef.isDestroyed()) {
+      console.error('[attach-robot-view] 主窗口引用丢失!');
+      return;
+    }
+
+    const mainBounds = mainWindowRef.getBounds();
+    controlWindow = new BrowserWindow({
+      x: mainBounds.x,
+      y: mainBounds.y,
+      width: mainBounds.width,
+      height: mainBounds.height,
+      parent: mainWindowRef,
+      title: 'RPA 实时控制台',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+      }
+    });
+
+    const view = executor.browserController.view;
+
+    // 从主窗口移除（如果存在）
+    try {
+      const ownerWin = BrowserWindow.fromBrowserView(view);
+      if (ownerWin && !ownerWin.isDestroyed()) {
+        ownerWin.removeBrowserView(view);
+      }
+    } catch (e) { /* BrowserView 可能尚未附加 */ }
+
+    controlWindow.setBrowserView(view);
+
+    const syncBounds = () => {
+      if (controlWindow && !controlWindow.isDestroyed() && mainWindowRef && !mainWindowRef.isDestroyed()) {
+        const mainBounds = mainWindowRef.getBounds();
+        controlWindow.setBounds(mainBounds);
+        const contentBounds = controlWindow.getContentBounds();
+        view.setBounds({ x: 0, y: 0, width: contentBounds.width, height: contentBounds.height });
+      }
+    };
+
+    syncBounds(); // 立即同步一次
+
+    const onMainWindowMove = () => syncBounds();
+    const onMainWindowResize = () => syncBounds();
+
+    mainWindowRef.on('move', onMainWindowMove);
+    mainWindowRef.on('resize', onMainWindowResize);
+
+    controlWindowSyncListeners = { onMainWindowMove, onMainWindowResize };
+
+    controlWindow.on('close', () => {
+      if (mainWindowRef && !mainWindowRef.isDestroyed() && controlWindowSyncListeners) {
+        mainWindowRef.removeListener('move', controlWindowSyncListeners.onMainWindowMove);
+        mainWindowRef.removeListener('resize', controlWindowSyncListeners.onMainWindowResize);
+      }
+
+      try {
+        if (view && !view.webContents.isDestroyed()) {
+           // 仅从窗口中移除视图，不销毁它，因为RPA任务可能仍在后台运行
+           controlWindow?.removeBrowserView(view);
+        }
+      } catch(e) {
+        console.warn('[controlWindow.close] 移除 BrowserView 失败:', e.message);
+      }
+
+      controlWindow = null;
+      controlWindowSyncListeners = null;
+    });
+
+    controlWindow.show();
+  });
+
+  // 🚨 [核心改造] detach-robot-view 现在负责关闭独立窗口
   ipcMain.on('detach-robot-view', (event) => {
     try {
-      if (currentBrowserController) {
-        currentBrowserController.detachFromWindow();
-        currentBrowserController = null;
+      if (controlWindow && !controlWindow.isDestroyed()) {
+        controlWindow.close();
       }
     } catch (e) { console.error('[IPC] detach-robot-view:', e.message); }
   });

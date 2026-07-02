@@ -7,7 +7,6 @@
  * 策略：尽力删除 → 失败后降级为逐文件清理 → 残留锁文件留到下次启动清理。
  */
 import { remove } from 'fs-extra';
-import { session } from 'electron';
 import { readdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 

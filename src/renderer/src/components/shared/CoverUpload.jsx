@@ -34,7 +34,10 @@ export default function CoverUpload({
             {value ? (
               <img src={value} className="w-full h-full object-cover rounded" alt="cover" />
             ) : (
-              <span className="text-xs text-gray-400 w-full h-full flex items-center justify-center">无封面</span>
+              <div className="w-full h-full flex flex-col items-center justify-center">
+                <span className="text-2xl leading-none text-gray-300 mb-1">+</span>
+                <span className="text-xs text-gray-400">上传</span>
+              </div>
             )}
           </div>
           <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm rounded-lg">

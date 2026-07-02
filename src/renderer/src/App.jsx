@@ -10,12 +10,14 @@ import EmailMatrixPanel from "./components/AiHub/panels/EmailMatrixPanel";
 import AppLauncherWidget from './components/AppLauncherWidget';
 import { AiTaskProvider } from './components/AiHub/AiTaskContext'; // 引入大脑
 import { ToastProvider, useToast } from './components/ToastContext';
+import DebugPanel from './components/DebugPanel';
+import ProtocolAggregator from './components/ProtocolAggregator';
 
 import logoImg from './assets/logo.png';
-import { 
+import {
   Users, Send, Activity, MessageSquare, PieChart,
   LogOut, Shield, AlignLeft, ChevronRight, Archive, Bot, Smartphone, Gift, X, Mail,
-  QrCode, RefreshCw, Check // 🌟 新增了扫码登录需要的图标
+  QrCode, RefreshCw, Check
 } from 'lucide-react';
 
 const getElectron = () => {
@@ -319,6 +321,9 @@ export default function App() {
   const [browserTabs, setBrowserTabs] = useState([]);
   const [activeTabId, setActiveTabId] = useState(null);
 
+  // ─── BrowserView 容器屏幕坐标 — 供调试面板定位对齐 ───
+  const [browserViewRect, setBrowserViewRect] = useState(null);
+
   // ─── PublishTask 跨视图状态保持 ───
   const [publishStep, setPublishStep] = useState(0);
   const [publishEditorTab, setPublishEditorTab] = useState('universal');
@@ -357,13 +362,39 @@ export default function App() {
   useEffect(() => {
     if (!isLoggedIn) return;
     const electron = getElectron();
-    
+
+    // 恢复运行中的任务状态
+    const restoreRunningTasks = () => {
+      try {
+        const raw = localStorage.getItem('publish_history_v1');
+        if (raw) {
+          const data = JSON.parse(raw);
+          const runningTasks = (data.records || []).filter(r =>
+            !['任务圆满成功', '任务成功', '任务失败', '已取消', '任务已取消', '用户终止', '已转手动接管', '手动发布已完成'].includes(r.status)
+          );
+          runningTasks.forEach(task => {
+            electron.ipcRenderer.send('reconnect-task-monitor', task.historyId);
+          });
+        }
+      } catch (e) {
+        console.warn('任务恢复失败:', e.message);
+      }
+    };
+
+    // 监听主进程 IPC 注册完成事件，注册完成后再恢复运行中的任务
+    const handleIpcRegistered = () => {
+      console.log('[App] IPC 注册完成，开始恢复运行中的任务');
+      restoreRunningTasks();
+    };
+
+    const unsubscribe = electron.ipcRenderer.on('ipc-registered', handleIpcRegistered);
+
     async function loadData() {
       try {
         const data = await electron.ipcRenderer.invoke('db-get-accounts');
         if (Array.isArray(data)) {
-          setAccounts(data.map(item => ({ 
-            id: item.id, alias: item.alias, platform: item.platform, 
+          setAccounts(data.map(item => ({
+            id: item.id, alias: item.alias, platform: item.platform,
             group: item.group_name, status: item.status, customUrl: item.custom_url,
             real_name: item.real_name, username: item.username, user_id: item.user_id,
             avatar: item.avatar, followers: item.followers, following: item.following,
@@ -573,9 +604,15 @@ export default function App() {
           <div className={`flex-1 overflow-y-auto ${isPublishFullscreen ? 'p-0' : 'p-4'} ${activeTab === 'email' ? '!p-0 !overflow-hidden' : ''}`}>
             {activeTab === 'email' && <EmailMatrixPanel />}
             {activeTab === 'dashboard' && <StatisticsView setActiveTab={setActiveTab} />}
-            {activeTab === 'accounts' && <AccountManagerView accounts={accounts} setAccounts={setAccounts} browserTabs={browserTabs} setBrowserTabs={setBrowserTabs} activeTabId={activeTabId} setActiveTabId={setActiveTabId} />}
+            {activeTab === 'accounts' && (
+              <>
+                <AccountManagerView accounts={accounts} setAccounts={setAccounts} browserTabs={browserTabs} setBrowserTabs={setBrowserTabs} activeTabId={activeTabId} setActiveTabId={setActiveTabId} onBrowserViewRect={setBrowserViewRect} />
+                <DebugPanel browserViewRect={browserViewRect} />
+                <ProtocolAggregator browserViewRect={browserViewRect} />
+              </>
+            )}
             {activeTab === 'publish' && <PublishTask setActiveTab={setActiveTab} accounts={accounts} videoList={videoList} setVideoList={setVideoList} activeVideoId={activeVideoId} setActiveVideoId={setActiveVideoId} publishHistory={publishHistory} setPublishHistory={setPublishHistory} publishStep={publishStep} setPublishStep={setPublishStep} publishEditorTab={publishEditorTab} setPublishEditorTab={setPublishEditorTab} publishWorkbenchVideos={publishWorkbenchVideos} setPublishWorkbenchVideos={setPublishWorkbenchVideos} isPublishFullscreen={isPublishFullscreen} setIsPublishFullscreen={setIsPublishFullscreen} />}
-            {activeTab === 'history' && <PublishHistoryView videoList={videoList} setVideoList={setVideoList} publishHistory={publishHistory} setPublishHistory={setPublishHistory} setActiveTab={setActiveTab} setActiveVideoId={setActiveVideoId} setPublishStep={setPublishStep} />}
+            {activeTab === 'history' && <PublishHistoryView videoList={videoList} setVideoList={setVideoList} publishHistory={publishHistory} setPublishHistory={setPublishHistory} setActiveTab={setActiveTab} setActiveVideoId={setActiveVideoId} setPublishStep={setPublishStep} accounts={accounts} />}
             {activeTab === 'monitor' && <RiskControl/>}
             {activeTab === 'interact' && <InteractionView accounts={accounts} />}
             

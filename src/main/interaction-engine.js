@@ -6,29 +6,15 @@ import { getDB } from './database.js';
 import { launchSandbox, closeSandbox } from './browser-manager.js';
 
 // ==========================================================
-// 🌟 核心突破：全域平台显式动态路由 (完美兼容 Vite/Webpack 打包机制)
+// 🌟 平台引擎动态路由 - 已迁移至 PlatformRegistry
 // ==========================================================
-const ENGINE_LOADERS = {
-  '抖音': () => import('./platforms/douyin.js'),
-  'B站': () => import('./platforms/bilibili.js'),
-  '快手': () => import('./platforms/kuaishou.js'),
-  '百家号': () => import('./platforms/baijiahao.js'), // 👈 这里补上逗号
-  '小红书': () => import('./platforms/xiaohongshu.js'), // 👈 这里补上逗号
-  '微信视频号': () => import('./platforms/weixin.js')   // 👈 这里名字必须是'微信视频号'，对齐数据库
-  // 💡 架构师指南：以后你要加新平台（比如小红书），建好 xiaohongshu.js 文件后，
-  // 只需要在这里加上一行： '小红书': () => import('./platforms/xiaohongshu.js') 即可！
-};
+// 旧的平台引擎已移除，需要重构为使用 PlatformRegistry
+// const ENGINE_LOADERS = { ... }
+// async function loadEngine(platform) { ... }
 
-// 🌟 动态加载引擎核心函数
+// 临时占位函数 - 需要重构
 async function loadEngine(platform) {
-    const loader = ENGINE_LOADERS[platform];
-    if (!loader) throw new Error(`系统尚未配置 [${platform}] 的路由，请先在 ENGINE_LOADERS 字典中注册它。`);
-    try {
-        // 执行对应的 import() 函数，实现按需加载
-        return await loader();
-    } catch (e) {
-        throw new Error(`[${platform}] 引擎加载失败！请检查文件是否存在及代码语法。\n详细报错: ${e.message}`);
-    }
+    throw new Error(`[InteractionEngine] 平台 "${platform}" 引擎尚未迁移至新架构，请重构此模块`);
 }
 // 通用休眠与会话管理
 const randomSleep = async (page, min = 1000, max = 2500) => {

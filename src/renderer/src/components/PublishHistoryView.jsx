@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   CheckCircle, XCircle, RefreshCw, Edit, FolderTree, Eye, X, Chrome, Shield,
-  MousePointerClick, Pause, Play, Activity, Clock, AlertTriangle
+  MousePointerClick, Pause, Play, Activity, Clock, AlertTriangle, RotateCw
 } from 'lucide-react';
 import { toMatrixMediaUrl } from '../utils/safePath';
+import EngineStatusIndicator from './EngineStatusIndicator';
 
 const getElectron = () => {
   if (typeof window !== 'undefined' && window.electron) return window.electron;
@@ -31,7 +32,7 @@ const PLATFORM_COLORS = {
   '腾讯视频': 'bg-[#00A4FF]', '大鱼号(优酷)': 'bg-[#FF6600]', '爱奇艺号': 'bg-emerald-600'
 };
 
-export default function PublishHistoryView({ videoList, setVideoList, publishHistory, setPublishHistory, setActiveTab, setActiveVideoId, setPublishStep }) {
+export default function PublishHistoryView({ videoList, setVideoList, publishHistory, setPublishHistory, setActiveTab, setActiveVideoId, setPublishStep, accounts = [] }) {
   const electron = getElectron();
 
   // ─── 队列统计 ───
@@ -84,39 +85,140 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
 
   // ─── 操作 ───
 
+  // 🆕 过滤掉已删除平台的账号（只保留当前有效账号）
+  const filterValidAccounts = (targetAccounts) => {
+    if (!targetAccounts || !Array.isArray(targetAccounts)) return targetAccounts;
+    // 获取所有有效平台的账号字符串
+    const validAccountStrs = accounts.map(a => `${a.id}|${a.platform}|${a.alias}`);
+    // 只保留 targetAccounts 中存在于有效账号的项
+    return targetAccounts.filter(acc => validAccountStrs.includes(acc));
+  };
+
   const handleReEdit = (hist) => {
     setVideoList(prev => {
       const exists = prev.find(v => v.id === hist.videoId);
       if (exists) {
-        // 如果已有 url 则保留，否则从 path 兜底生成
         return prev.map(v => v.id === hist.videoId
-          ? { ...v, status: '已就绪', url: v.url || toMatrixMediaUrl(v.path) }
+          ? {
+              ...v,
+              status: '已就绪',
+              url: v.url || toMatrixMediaUrl(v.path),
+              // 🆕 过滤掉已删除平台的账号
+              config: {
+                ...v.config,
+                targetAccounts: filterValidAccounts(v.config.targetAccounts)
+              }
+            }
           : v);
       }
       if (hist._videoSnapshot) {
-        return [...prev, { ...hist._videoSnapshot, status: '已就绪', url: toMatrixMediaUrl(hist._videoSnapshot.path) }];
+        return [...prev, {
+          ...hist._videoSnapshot,
+          status: '已就绪',
+          url: toMatrixMediaUrl(hist._videoSnapshot.path),
+          // 🆕 过滤掉已删除平台的账号
+          config: {
+            ...hist._videoSnapshot.config,
+            targetAccounts: filterValidAccounts(hist._videoSnapshot.config.targetAccounts)
+          }
+        }];
       }
       return prev;
     });
     setActiveVideoId(hist.videoId);
-    setPublishStep(2);  // 直接跳到审核发布页，绕过媒体库
+    setPublishStep(2);
     setActiveTab('publish');
   };
 
+  // 重发：先取消旧任务，跳转到配置界面让用户重新确认
+  const handleRetry = async (hist) => {
+    try {
+      // 🆕 先取消旧任务（如果有活跃浏览器）
+      if (hist.historyId) {
+        await electron.ipcRenderer.invoke('cancel-publish-task', hist.historyId).catch(() => {});
+        // 等待浏览器关闭
+        await new Promise(r => setTimeout(r, 1000));
+      }
+
+      // 剔除旧状态字段，只保留任务数据
+      const { status, time, startTime, endTime, error, statusType, message, historyId, videoId, ...taskData } = hist;
+
+      // 🆕 跳转到配置页，让用户重新确认任务
+      setVideoList(prev => {
+        const exists = prev.find(v => v.id === videoId);
+        if (exists) {
+          return prev.map(v => v.id === videoId
+            ? {
+                ...v,
+                status: '已就绪',
+                url: v.url || toMatrixMediaUrl(v.path),
+                // 🆕 过滤掉已删除平台的账号
+                config: {
+                  ...v.config,
+                  targetAccounts: filterValidAccounts(v.config.targetAccounts)
+                }
+              }
+            : v);
+        }
+        if (hist._videoSnapshot) {
+          return [...prev, {
+            ...hist._videoSnapshot,
+            status: '已就绪',
+            url: toMatrixMediaUrl(hist._videoSnapshot.path),
+            // 🆕 过滤掉已删除平台的账号
+            config: {
+              ...hist._videoSnapshot.config,
+              targetAccounts: filterValidAccounts(hist._videoSnapshot.config.targetAccounts)
+            }
+          }];
+        }
+        return prev;
+      });
+
+      setActiveVideoId(videoId);
+      setPublishStep(2);  // 跳转到配置页
+      setActiveTab('publish');
+
+    } catch (e) {
+      console.error('[重发失败]', e);
+    }
+  };
+
+  // 删除记录时，如有活跃浏览器则强制关闭
+  const handleDelete = async (hist) => {
+    const hasBrowser = ['运行中', '已转手动接管', '已终止', '手动发布完成中...', '任务失败'].includes(hist.status);
+    if (hasBrowser) {
+      try {
+        await electron.ipcRenderer.invoke('force-close-manual-publish', hist.historyId);
+      } catch (e) { /* 浏览器可能已关闭，忽略 */ }
+    }
+    setPublishHistory(prev => prev.filter(h => h.historyId !== hist.historyId));
+  };
+
   const handleCancel = async (historyId) => {
-    // 🆕 乐观 UI：立即标记为"用户终止"
+    // v3: 乐观 UI — 立即标记为"已终止"
     setPublishHistory(prev => prev.map(item =>
       item.historyId === historyId
-        ? { ...item, status: '用户终止', statusType: 'cancelled', endTime: Date.now() }
+        ? { ...item, status: '已取消', statusType: 'cancelled', endTime: Date.now() }
         : item
     ));
     try {
       const res = await electron.ipcRenderer.invoke('cancel-publish-task', historyId);
       if (!res.success) {
-        console.warn('[取消]', res.message);
+        console.warn('[终止]', res.message);
       }
     } catch (e) {
-      console.error('[取消] IPC 失败:', e);
+      console.error('[终止] IPC 失败:', e);
+    }
+  };
+
+  /** v3: 紧急停止全部 — 毙掉所有运行中任务 */
+  const handleEmergencyStopAll = async () => {
+    try {
+      const res = await electron.ipcRenderer.invoke('emergency-stop-all');
+      console.log('[紧急停止] 已终止 ' + res.stopped + ' 个任务');
+    } catch (e) {
+      console.error('[紧急停止] IPC 失败:', e);
     }
   };
 
@@ -195,8 +297,15 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
     }
   };
 
-  const handleClearSelected = () => {
+  const handleClearSelected = async () => {
     if (selectedIds.size === 0) return;
+    // 先关闭有活跃浏览器的任务
+    const activeStatuses = ['运行中', '已转手动接管', '已终止', '手动发布完成中...'];
+    for (const hist of publishHistory) {
+      if (selectedIds.has(hist.historyId) && activeStatuses.includes(hist.status)) {
+        try { await electron.ipcRenderer.invoke('force-close-manual-publish', hist.historyId); } catch (e) {}
+      }
+    }
     setPublishHistory(prev => prev.filter(h => !selectedIds.has(h.historyId)));
     setSelectedIds(new Set());
   };
@@ -297,6 +406,16 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
             >
               {stats.paused ? <><Play size={14} /> 恢复调度</> : <><Pause size={14} /> 暂停调度</>}
             </button>
+
+            {/* v3: 全部终止 */}
+            {stats.running > 0 && (
+              <button
+                onClick={handleEmergencyStopAll}
+                className="px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2 transition shadow-sm active:scale-95 bg-red-600 text-white hover:bg-red-700"
+              >
+                <XCircle size={14} /> 全部终止
+              </button>
+            )}
           </div>
         </div>
 
@@ -357,13 +476,13 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
 
               {publishHistory.map(hist => {
                 const coverSrc = hist.coverPath || getCoverSrc(hist.videoId);
-                const isRunning = !['任务圆满成功', '任务成功', '任务失败', '已取消', '任务已取消', '用户终止', '已转手动接管', '手动发布已完成', '需要重新扫码登录'].includes(hist.status);
+                const isRunning = !['任务圆满成功', '任务成功', '任务失败', '已取消', '任务已取消', '已终止', '已转手动接管', '手动发布已完成', '需要重新扫码登录'].includes(hist.status);
                 const isManual = hist.status === '已转手动接管';
                 const isStepNeedsManual = hist.statusType === 'step_needs_manual';  // 🆕 步骤失败暂停等手动
                 const needsRelogin = hist.status === '需要重新扫码登录';
                 const isSuccess = ['任务圆满成功', '任务成功', '手动发布已完成'].includes(hist.status);
                 const isFailed = hist.status === '任务失败';
-                const isCancelled = ['已取消', '任务已取消', '用户终止'].includes(hist.status);
+                const isCancelled = ['已取消', '任务已取消', '已终止'].includes(hist.status);
                 const duration = formatDuration(hist.startTime, hist.endTime);
                 const platformBg = PLATFORM_COLORS[hist.platform] || 'bg-slate-600';
 
@@ -423,7 +542,7 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
                     </td>
 
                     {/* 时间 */}
-                    <td className="p-4 text-slate-500 font-mono text-xs">{hist.time}</td>
+                    <td className="p-4 text-slate-500 font-mono text-xs whitespace-nowrap">{hist.time}</td>
 
                     {/* 🆕 耗时 */}
                     <td className="p-4">
@@ -438,55 +557,18 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
 
                     {/* 🆕 状态 + 错误原因 */}
                     <td className="p-4">
-                      {isRunning && (
-                        <div className="flex flex-col">
-                          <span className="text-indigo-600 font-bold flex items-center text-xs">
-                            <RefreshCw size={13} className="mr-1.5 animate-spin" />
-                            {hist.status}
+                      <EngineStatusIndicator
+                        engineType={hist.engineType || 'embedded'}
+                        status={hist.statusType || hist.status}
+                        message={hist.message}
+                      />
+                      {(hist.message && hist.message !== hist.status) || hist.errorMessage ? (
+                        <div className="mt-1">
+                          <span className="text-[10px] text-slate-400 truncate max-w-[150px]" title={hist.message || hist.errorMessage}>
+                            {hist.message || hist.errorMessage}
                           </span>
-                          {hist.message && hist.message !== hist.status && (
-                            <span className="text-[10px] text-slate-400 mt-0.5 truncate max-w-[150px]" title={hist.message}>{hist.message}</span>
-                          )}
                         </div>
-                      )}
-                      {isSuccess && (
-                        <span className="text-emerald-600 font-bold flex items-center text-xs">
-                          <CheckCircle size={14} className="mr-1.5" />发布成功
-                        </span>
-                      )}
-                      {isFailed && (
-                        <div className="flex flex-col">
-                          <span className="text-red-500 font-bold flex items-center text-xs">
-                            <XCircle size={14} className="mr-1.5" />发布失败
-                          </span>
-                          {hist.errorMessage && (
-                            <span className="text-[10px] text-red-400 mt-0.5 truncate max-w-[150px]" title={hist.errorMessage}>
-                              <AlertTriangle size={10} className="inline mr-0.5" />
-                              {hist.errorMessage}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {isManual && (
-                        <span className="text-amber-500 font-bold flex items-center text-xs">
-                          <RefreshCw size={14} className="mr-1.5 animate-spin" />等待手动完成
-                        </span>
-                      )}
-                      {isStepNeedsManual && (
-                        <span className="text-amber-500 font-bold flex items-center text-xs">
-                          <AlertTriangle size={14} className="mr-1.5" />{hist.status}
-                        </span>
-                      )}
-                      {needsRelogin && (
-                        <span className="text-orange-500 font-bold flex items-center text-xs" title="需要重新扫码登录，请点击控制按钮进入实时页面扫码">
-                          <Shield size={14} className="mr-1.5" />需要重新扫码登录
-                        </span>
-                      )}
-                      {isCancelled && (
-                        <span className="text-slate-500 font-bold flex items-center text-xs">
-                          <XCircle size={14} className="mr-1.5" />{hist.status === '用户终止' ? '用户终止' : '已取消'}
-                        </span>
-                      )}
+                      ) : null}
                     </td>
 
                     {/* 🆕 操作 */}
@@ -511,7 +593,7 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
                             onClick={() => handleCancel(hist.historyId)}
                             className="text-red-600 bg-white hover:bg-red-50 border border-red-200 hover:border-red-400 px-3 py-1.5 rounded-lg transition font-bold text-xs flex items-center shadow-sm active:scale-95"
                           >
-                            <XCircle size={13} className="mr-1" /> 取消
+                            <XCircle size={13} className="mr-1" /> 终止
                           </button>
                         </div>
                       ) : (isManual || needsRelogin) ? (
@@ -544,13 +626,19 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
                       ) : (isFailed || isCancelled) ? (
                         <div className="flex items-center justify-end gap-2">
                           <button
+                            onClick={() => handleRetry(hist)}
+                            className="text-emerald-600 bg-white hover:text-emerald-800 border border-emerald-200 hover:border-emerald-400 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition font-bold text-xs flex items-center shadow-sm active:scale-95"
+                          >
+                            <RotateCw size={12} className="mr-1" /> 重发
+                          </button>
+                          <button
                             onClick={() => handleReEdit(hist)}
                             className="text-indigo-600 bg-white hover:text-indigo-800 border border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition font-bold text-xs flex items-center shadow-sm active:scale-95"
                           >
                             <Edit size={12} className="mr-1" /> 重新配置补发
                           </button>
                           <button
-                            onClick={() => setPublishHistory(prev => prev.filter(h => h.historyId !== hist.historyId))}
+                            onClick={() => handleDelete(hist)}
                             className="text-red-500 bg-white hover:bg-red-50 border border-red-200 hover:border-red-400 px-2.5 py-1.5 rounded-lg transition font-bold text-xs flex items-center shadow-sm active:scale-95"
                             title="从列表中删除"
                           >
@@ -559,7 +647,7 @@ export default function PublishHistoryView({ videoList, setVideoList, publishHis
                         </div>
                       ) : (
                         <button
-                          onClick={() => setPublishHistory(prev => prev.filter(h => h.historyId !== hist.historyId))}
+                          onClick={() => handleDelete(hist)}
                           className="text-slate-400 hover:text-red-500 hover:bg-red-50 border border-slate-200 hover:border-red-300 px-2.5 py-1.5 rounded-lg transition font-bold text-xs flex items-center shadow-sm active:scale-95"
                           title="从列表中删除"
                         >

@@ -9,6 +9,7 @@ import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
 import crypto from 'crypto';
 import fs from 'fs';
+import path from 'path';
 import { getDB } from './database.js';
 import { resolveProviderConfig, FOLDER_MAP } from './email-providers.js';
 
@@ -338,12 +339,21 @@ export function registerEmailIPC() {
           });
         }
 
-        // 写入 SQLite
+        // 写入 SQLite — 冲突时保留本地 is_read/is_starred（用户已操作的优先）
         const insert = db.prepare(`
-          INSERT OR REPLACE INTO email_messages
+          INSERT INTO email_messages
             (account_id, uid, folder, message_id, from_address, from_name, to_address,
              subject, preview, received_at, is_read, is_starred, has_attachments)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(account_id, uid, folder) DO UPDATE SET
+            message_id = excluded.message_id,
+            from_address = excluded.from_address,
+            from_name = excluded.from_name,
+            to_address = excluded.to_address,
+            subject = excluded.subject,
+            preview = excluded.preview,
+            received_at = excluded.received_at,
+            has_attachments = excluded.has_attachments
         `);
         const tx = db.transaction(() => {
           for (const m of messages) {
@@ -478,6 +488,19 @@ export function registerEmailIPC() {
   // ─── 邮件操作 ──────────────────────────────────
 
   ipcMain.handle('email-mark-read', async (_, { accountId, uid, folder }) => {
+    // 无论 IMAP 是否成功，先更新本地 DB（保证红点消失）
+    try {
+      db.prepare('UPDATE email_messages SET is_read = 1 WHERE account_id = ? AND uid = ? AND folder = ?')
+        .run(accountId, uid, folder);
+      const cnt = db.prepare(
+        'SELECT COUNT(*) as c FROM email_messages WHERE account_id = ? AND folder = ? AND is_read = 0'
+      ).get(accountId, folder);
+      db.prepare('UPDATE email_accounts SET unread_count = ? WHERE id = ?').run(cnt.c, accountId);
+    } catch (dbErr) {
+      console.error('[email-mark-read] DB更新失败:', dbErr.message);
+    }
+
+    // IMAP 标记可失败（连接断开等不影响本地状态）
     try {
       const client = await getImapClient(accountId);
       const realFolder = await findRealFolder(client, folder);
@@ -485,20 +508,11 @@ export function registerEmailIPC() {
       try {
         await client.messageFlagsAdd({ uid }, ['\\Seen'], { uid: true });
       } finally { lock.release(); }
-
-      db.prepare('UPDATE email_messages SET is_read = 1 WHERE account_id = ? AND uid = ? AND folder = ?')
-        .run(accountId, uid, folder);
-
-      // 更新未读计数
-      const cnt = db.prepare(
-        'SELECT COUNT(*) as c FROM email_messages WHERE account_id = ? AND folder = ? AND is_read = 0'
-      ).get(accountId, folder);
-      db.prepare('UPDATE email_accounts SET unread_count = ? WHERE id = ?').run(cnt.c, accountId);
-
-      return { success: true };
-    } catch (e) {
-      return { success: false, message: e.message };
+    } catch (imapErr) {
+      console.warn('[email-mark-read] IMAP标记失败(非致命):', imapErr.message);
     }
+
+    return { success: true };
   });
 
   ipcMain.handle('email-mark-unread', async (_, { accountId, uid, folder }) => {
@@ -636,7 +650,12 @@ export function registerEmailIPC() {
       return { success: true, messageId: result.messageId };
     } catch (e) {
       console.error('[EmailEngine] 发送失败:', e);
-      return { success: false, message: `发送失败: ${e.message}` };
+      // SMTP 552 附件过大 — 中文友好提示
+      const msg = String(e.message || e);
+      if (e.responseCode === 552 || /552|message size exceeded/i.test(msg)) {
+        return { success: false, message: '附件体积过大，请确保单个文件在 15MB 以内，或使用云盘通道上传大文件' };
+      }
+      return { success: false, message: `发送失败: ${msg}` };
     }
   });
 
@@ -654,6 +673,40 @@ export function registerEmailIPC() {
       });
     } catch (e) {
       return [];
+    }
+  });
+
+  // ─── R2 云盘上传（大附件直传） ────────────────────
+
+  ipcMain.handle('r2-upload-file', async (_, { filePath, putUrl, filename }) => {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return { success: false, message: `文件不存在: ${filename}` };
+      }
+
+      const fileBuffer = fs.readFileSync(filePath);
+      const fileSizeMB = (fileBuffer.length / 1024 / 1024).toFixed(1);
+      console.log(`[R2Upload] 开始上传: ${filename} (${fileSizeMB}MB)`);
+
+      const resp = await fetch(putUrl, {
+        method: 'PUT',
+        body: fileBuffer,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+        },
+      });
+
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        console.error(`[R2Upload] 上传失败: HTTP ${resp.status}`, errText);
+        return { success: false, message: `R2 上传失败: HTTP ${resp.status}` };
+      }
+
+      console.log(`[R2Upload] ✅ 上传成功: ${filename}`);
+      return { success: true };
+    } catch (e) {
+      console.error('[R2Upload] 上传异常:', e);
+      return { success: false, message: `R2 上传异常: ${e.message}` };
     }
   });
 

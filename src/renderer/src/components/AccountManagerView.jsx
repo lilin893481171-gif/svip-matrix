@@ -13,7 +13,7 @@ const getElectron = () => {
   };
 };
 
-export default function AccountManagerView({ accounts, setAccounts, browserTabs, setBrowserTabs, activeTabId, setActiveTabId }) {
+export default function AccountManagerView({ accounts, setAccounts, browserTabs, setBrowserTabs, activeTabId, setActiveTabId, onBrowserViewRect }) {
   const [showModal, setShowModal] = useState(false);
   const [modalStep, setModalStep] = useState(1);
   const [loginMethod, setLoginMethod] = useState('scan'); 
@@ -54,6 +54,7 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
   // ─── 多标签页内嵌浏览器（状态提升至 App.jsx，跨视图存活）───
   const [addressInput, setAddressInput] = useState('');
   const sessionPanelRef = useRef(null);
+  const [debugPanelMargin, setDebugPanelMargin] = useState(0);
 
   // 当前活跃标签的 URL
   const activeTab = browserTabs.find(t => String(t.accountId) === String(activeTabId));
@@ -99,20 +100,42 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
     electron.ipcRenderer.invoke('open-account-browser-devtools', String(activeTabId));
   };
 
+  // ─── 监听主进程发来的 BrowserView 缩进量（调试面板打开时）───
+  useEffect(() => {
+    const cleanup = electron.ipcRenderer.on('debug-panel-resize', ({ margin }) => {
+      setDebugPanelMargin(margin || 0);
+    });
+    return () => { if (cleanup) cleanup(); };
+  }, []);
+
+  // ─── 上报 BrowserView 容器屏幕坐标给父组件（供调试面板定位对齐）───
+  useEffect(() => {
+    if (!onBrowserViewRect || !sessionPanelRef.current) return
+    const report = () => {
+      if (!sessionPanelRef.current) return
+      const r = sessionPanelRef.current.getBoundingClientRect()
+      onBrowserViewRect({ top: Math.round(r.top), left: Math.round(r.left), width: Math.round(r.width), height: Math.round(r.height) })
+    }
+    const ro = new ResizeObserver(() => report())
+    ro.observe(sessionPanelRef.current)
+    report()
+    return () => ro.disconnect()
+  }, [onBrowserViewRect, activeTabId])
+
   // 标签切换时自动吸附/分离 BrowserView
   useEffect(() => {
     if (activeTabId !== null && sessionPanelRef.current) {
       const updateBounds = () => {
         if (!sessionPanelRef.current) return;
         const rect = sessionPanelRef.current.getBoundingClientRect();
+        const adjustedWidth = Math.max(200, rect.width - debugPanelMargin);
         electron.ipcRenderer.send('attach-account-browser', {
           accountId: String(activeTabId),
-          bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
+          bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(adjustedWidth), height: Math.round(rect.height) }
         });
       };
       setTimeout(updateBounds, 300);
       window.addEventListener('resize', updateBounds);
-      // ResizeObserver 监听容器尺寸变化（侧边栏折叠/展开时触发）
       const ro = new ResizeObserver(() => updateBounds());
       ro.observe(sessionPanelRef.current);
       return () => {
@@ -121,7 +144,7 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
         electron.ipcRenderer.send('detach-account-browser', { accountId: String(activeTabId) });
       };
     }
-  }, [activeTabId]);
+  }, [activeTabId, debugPanelMargin]);
 
   // 弹窗/模态层打开时，隐藏 BrowserView 防止遮挡（BrowserView 原生层不受 CSS z-index 控制）
   const isAnyModalOpen = showModal || showGroupModal;
@@ -133,9 +156,10 @@ export default function AccountManagerView({ accounts, setAccounts, browserTabs,
       const timer = setTimeout(() => {
         if (sessionPanelRef.current && !showModal && !showGroupModal) {
           const rect = sessionPanelRef.current.getBoundingClientRect();
+          const adjustedWidth = Math.max(200, rect.width - debugPanelMargin);
           electron.ipcRenderer.send('attach-account-browser', {
             accountId: String(activeTabId),
-            bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
+            bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(adjustedWidth), height: Math.round(rect.height) }
           });
         }
       }, 150); // 等弹窗关闭动画完成

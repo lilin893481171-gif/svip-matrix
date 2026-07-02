@@ -9,9 +9,9 @@ export default function LabeledField({
 }) {
   return (
     <div className="flex items-start">
-      <div className={`${labelWidth} flex-shrink-0 ${topPadding} text-right pr-4 text-gray-600 font-medium`}>
+      <div className={`${labelWidth} flex-shrink-0 ${topPadding} text-right pr-6 text-gray-700 font-medium`}>
         {required && <span className="text-red-500 mr-1">*</span>}
-        {label}
+        {label}：
       </div>
       <div className="flex-1">
         {children}

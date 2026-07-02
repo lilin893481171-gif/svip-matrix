@@ -5,7 +5,7 @@
 
 import { app } from 'electron';
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, rmdirSync } from 'fs';
-import { join, resolve } from 'path';
+import { join } from 'path';
 
 /**
  * 获取系统 Chrome 用户数据目录
