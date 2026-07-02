@@ -1,3 +1,8 @@
 {
-  "scripts": {}
+  "scripts": {
+    "小红书": {
+      "version": 20,
+      "sha256": "placeholder"
+    }
+  }
 }
