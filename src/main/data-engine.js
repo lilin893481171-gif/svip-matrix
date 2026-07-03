@@ -9,10 +9,10 @@ import { ipcMain, app } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { safeDeletePartition, teardownPartition } from './safe-delete.js';
-import { getDB } from './database.js';
+import { getAccountRepository } from '../core/database/repository/AccountRepository.js';
 import * as cheerio from 'cheerio';
 import { PLATFORM_PROFILES } from './platform-profiles.js';
-import { upsertAccountProfile } from './account-store.js';
+import { guardScrapedData } from './platform-profiles.js';
 
 // ==========================================================
 // 1. 万能数据清洗引擎与解析器

@@ -3,8 +3,8 @@ import { FingerprintGenerator } from 'fingerprint-generator';
 import { FingerprintInjector } from 'fingerprint-injector';
 import fs from 'fs';
 import path from 'path';
-import { secureAtomicWriteFileSync, secureReadFileSync } from './utils/crypto-io.js';
-import { toPlaywright } from './utils/proxy.js';
+import { secureAtomicWriteFileSync, secureReadFileSync } from '../shared/crypto-io.js';
+import { toPlaywright } from '../shared/proxy.js';
 import { PLATFORM_PROFILES } from './platform-profiles.js';
 
 const activeBrowsers = new Map();

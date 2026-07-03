@@ -19,7 +19,7 @@ const __dirname = dirname(__filename);
 import { getDB } from './database.js';
 import { attachOnboardingSniffer, teardownOnboardingSniffer } from './account-onboarding.js';
 import { getTLSProxyRules, isTLSProxyRunning } from './tls-proxy-launcher.js';
-import { secureAtomicWriteFileSync, secureReadFileSync } from './utils/crypto-io.js';
+import { secureAtomicWriteFileSync, secureReadFileSync } from '../shared/crypto-io.js';
 import { setSession, getSession, removeSession, hasSession, getActiveSessions, getAllSessions, extractSessionIdentity } from './session-store.js';
 
 

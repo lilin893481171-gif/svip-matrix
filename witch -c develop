@@ -1,0 +1,10 @@
+* [33mc46b46e[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m feat: 恢复小红书 RPA 脚本并更新 manifest
+* [33meab0584[m feat: 完成项目结构分析和状态评估
+* [33m4ce516f[m feat: 完成浏览器引擎架构升级和平台插件化重构
+* [33mb8846ce[m feat: 完成浏览器引擎架构升级
+* [33mbf4a009[m fix: 小红书 /api/galaxy/ 端点嗅探 — 精确捕获 redId/userName/userAvatar
+* [33md13374c[m fix: 小红书 user_id 提取增强
+* [33mb147313[m refactor: Phase 5 — UI 微调
+* [33m8b08b11[m feat: Phase 4 — 主动导航至创作者后台
+* [33mccf01f9[m feat: Phase 3 — 头像本地缓存 (avatar-cache.js)
+* [33m050c11c[m refactor: Phase 2 — 统一数据分发 (account-store.js)

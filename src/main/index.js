@@ -8,7 +8,7 @@ import fs from 'fs'
 import { execSync, execFile } from 'child_process'
 import { chromium } from 'playwright-core'
 import { initDatabase, registerDatabaseIPC, getDB } from './database.js'
-import { registerRPAEngineIPC, runRPASelfTest, PLATFORM_URLS, PLATFORM_HOME_URLS } from './rpa-engine.js'
+import { registerRPAEngineIPC, runRPASelfTest, PLATFORM_URLS, PLATFORM_HOME_URLS } from '../core/rpa-engine.js'
 import { registerDataEngineIPC } from './data-engine.js';
 import { registerInteractionEngineIPC } from './interaction-engine.js';
 import { registerDataSyncIPC } from './data-sync.js';
